@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sqlite3
+import shutil
 import tempfile
 import uuid
 import zipfile
@@ -18,6 +19,8 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
 from .config import validate
+from .extract import RuleExtractor
+from .url_safety import credential_query_key
 from .metrics import catalog_rows, format_metric, validate_metric
 from .models import JobRecord
 from .pipeline import analyze
@@ -151,7 +154,7 @@ class EvidenceService:
 
     def catalogue(self, data):
         run_id = text_field(data, "run_id", required=True, limit=32)
-        _, rows, jobs, _ = self._source(run_id)
+        _, rows, jobs, source_config = self._source(run_id)
         query = text_field(data, "query", limit=200).casefold()
         page = number(data, "page", 0, 100000)
         state = self.state()
@@ -166,7 +169,8 @@ class EvidenceService:
             row["source_text"] = job.text
             row["saved_review"] = state["reviews"].get(row["requirement_id"])
         return {"rows": rows[page * 50:page * 50 + 50], "page": page, "total": total,
-                "revision": state["revision"], "page_size": 50}
+                "revision": state["revision"], "page_size": 50,
+                "capabilities": {k: v["label"] for k, v in source_config["capabilities"].items()}}
 
     def review(self, data):
         run_id = text_field(data, "run_id", required=True, limit=32)
@@ -216,11 +220,11 @@ class EvidenceService:
         if not isinstance(eid, str) or not EID.fullmatch(eid):
             raise InputError("证据 ID 无效。")
         run_id = text_field(data, "run_id", required=True, limit=32)
-        _, rows, _, _ = self._source(run_id)
+        _, rows, _, source_config = self._source(run_id)
         known = {r["requirement_id"]: r for r in rows}
         ids = data.get("requirement_ids", [])
         caps = data.get("capabilities", [])
-        for values, allowed_ids in ((ids, known), (caps, self.workspace.config["capabilities"])):
+        for values, allowed_ids in ((ids, known), (caps, source_config["capabilities"])):
             if not isinstance(values, list) or len(values) > 1000 or not all(isinstance(x, str) and x in allowed_ids for x in values):
                 raise InputError("要求或能力映射无效，请从界面重新选择。")
         if not caps or any(known[r]["capability"] not in caps for r in ids):
@@ -244,7 +248,7 @@ class EvidenceService:
             self._artifact_path(artifact)
         if external:
             external = canonical_url(external)
-            if urlsplit(external).scheme != "https" or any(re.search(r"token|cookie|session|password|authorization|api.?key", k, re.I) for k, _ in parse_qsl(urlsplit(external).query)):
+            if urlsplit(external).scheme != "https" or any(credential_query_key(k) for k, _ in parse_qsl(urlsplit(external).query)):
                 raise InputError("外部引用必须为不带登录凭据的 HTTPS URL。")
         if status == "approved" and not (artifact or external):
             raise InputError("确认的证据必须有附件或外部引用。")
@@ -264,8 +268,10 @@ class EvidenceService:
             state.update(name=name, evidence=entries)
             with tempfile.TemporaryDirectory(dir=self.root) as tmp:
                 path = Path(tmp) / "candidate.json"
-                atomic_json(path, self._candidate(state, path.parent))
-                load_candidate(path, self.workspace.config)
+                # Validate this entry against its own source snapshot; other reports
+                # may legitimately have different capability contracts.
+                atomic_json(path, self._candidate({"name": name, "evidence": [e]}, path.parent))
+                load_candidate(path, source_config)
         return self._write(data.get("expected_revision"), f"evidence:{eid}:{status}", mutate)
 
     def remove(self, data):
@@ -281,7 +287,15 @@ class EvidenceService:
         if type(data.get("expected_revision")) is not int or data["expected_revision"] != state["revision"]:
             raise Conflict("证据版本已变化，请刷新后生成报告。")
         run_id = text_field(data, "run_id", required=True, limit=32)
-        manifest, _, jobs, config = self._source(run_id)
+        manifest, frozen_rows, jobs, config = self._source(run_id)
+        if manifest.get("rule_engine") != RuleExtractor.version:
+            raise InputError("提取规则版本与来源报告不同，请先重新分析并显式复核、映射新报告。")
+        all_evidence_count = len(state["evidence"])
+        # Only explicitly mapped source-report evidence participates. Other
+        # reports remain editable/exportable but do not contaminate this one.
+        state["evidence"] = [e for e in state["evidence"] if e["source_run_id"] == run_id]
+        state["reviews"] = {rid: review for rid, review in state["reviews"].items()
+                            if review.get("source_run_id") == run_id}
         ident = uuid.uuid4().hex
         output = self.workspace.root / "reports" / ident
         with tempfile.TemporaryDirectory(prefix=".evidence-input-", dir=output.parent) as tmp:
@@ -296,9 +310,22 @@ class EvidenceService:
                     reviews_path=tmp / "reviews.json", role_filter=manifest["filters"]["roles"],
                     platform_filter=manifest["filters"]["platforms"], as_of=manifest["as_of"],
                     max_age_days=manifest["filters"]["max_collection_age_days"])
+        # Version labels alone are not enough (e.g. an unversioned change or
+        # a prior LLM proposal). Reject semantic drift rather than silently
+        # reusing review/mapping IDs for a different extracted requirement set.
+        fields = ("requirement_id", "record_id", "job_group_id", "capability", "quote", "start", "end",
+                  "relation", "strength", "tools", "roles", "evidence_level", "is_synthetic")
+        def semantics(rows):
+            return sorted((json_text({k: row[k] for k in fields}) for row in rows))
+        regenerated = [json.loads(line) for line in (output / "requirements.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+        if semantics(regenerated) != semantics(frozen_rows):
+            shutil.rmtree(output)
+            raise InputError("提取结果与已冻结的来源要求不一致；请重新分析，并显式复核和映射，旧报告未被修改。")
         # Include the UI revision in the same auditable report, without rewriting the source report.
         atomic_json(output / "evidence_revision.json", {"revision": state["revision"], "source_run_id": run_id,
                     "source_as_of": manifest["as_of"], "generated_at": utc_now(),
+                    "source_evidence_count": len(state["evidence"]),
+                    "excluded_other_report_evidence_count": all_evidence_count - len(state["evidence"]),
                     "note": "基于所选历史招聘快照和本次个人证据生成，不表示重新核实职位仍在招聘。"})
         result = json.loads((output / "run_manifest.json").read_text(encoding="utf-8"))
         result["output_files_sha256"]["evidence_revision.json"] = hashlib.sha256((output / "evidence_revision.json").read_bytes()).hexdigest()
