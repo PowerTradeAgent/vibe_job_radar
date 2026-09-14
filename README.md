@@ -1,67 +1,61 @@
-# Vibe Job Radar｜本地招聘要求工作台
+# Vibe Job Radar｜招聘要求与个人证据工作台
 
-将你有权处理的职位文本整理为逐条要求、来源证据、能力汇总、描述模板与缺口清单。Python 3.10+，没有第三方运行依赖。
+将获准处理的招聘文本变成逐条要求，再与自己的项目、附件和量化指标关联，生成描述、覆盖矩阵与缺口清单。
 
-## 从源码开始
+**先看这里：下载完整 main 源码并解压，双击 [START_HERE.html](START_HERE.html) 阅读浏览器版入门指南；完整步骤见 [零基础操作指南](docs/FIRST_RUN.md)。无需学习 Git、JSON、Docker 或数据库。仍需安装 Python，并非免安装 EXE。**
 
-安装 Python 3.10+，下载完整源码 ZIP 并解压。PR 尚未合并时，请先切换到 PR 分支下载。
+## 最短启动路线
 
-Windows：双击 `start_windows.bat`，或在源码目录运行：
-
-```powershell
-py -3 scripts/start_workbench.py
-```
-
-macOS/Linux：
+电脑已有 Python 3.10+ 时：Windows 双击 `start_windows.bat`；macOS/Linux 在源码目录运行：
 
 ```bash
 python3 scripts/start_workbench.py
 ```
 
-启动器会打开本地浏览器。未自动打开时，将终端里的完整地址复制到同一台电脑的浏览器。保持终端运行，Ctrl+C 停止。默认数据保存在用户主目录下 `.vibe-job-radar`。
+Windows 也可在源码目录执行：
 
-## 新增：自动采集与证据全界面化
+```powershell
+py -3 scripts/start_workbench.py
+```
 
-从基础工作台点击“进入自动采集 / 原文复核 / 附件与量化指标工作台”。
+浏览器未自动打开时，复制终端中的完整本地地址（包含 `#token`）。不要分享地址；保持终端运行，Ctrl+C 停止。源码运行无需 pip 安装，核心程序无第三方运行依赖。当前 CI 覆盖 Windows/Linux Python 3.10～3.12、macOS Python 3.12，其他组合不由这组 CI 保证。
 
-自动采集有三条真实可执行路线：搜索 API → 获准公开正文；职位 URL 列表 → 获准公开正文；用户提供的授权 JSON 数据源 → 入库。支持全部 8 个已配置平台的检索任务、预算、分页、暂停/恢复、原文去重和来源级失败审计。**这不是 8 个已经认证的官方平台连接器，更不是全市场穷尽。** 网页登录墙和 robots 拒绝不绕过；官方 API 的具体权限与实站验收仍需逐平台完成。搜索结果保存需要相应套餐存储权限。
+## 第一个实际结果
 
-个人证据界面支持原文分页复核、附件上传/下载、版本审计、13 类指标预览、精确要求映射、证据编辑/撤回、个人报告及可迁移 ZIP。不再要求手工编辑 candidate/reviews JSON。源报告冻结；新报告包含实际使用的候选人和复核快照，哈希不等于内容真实性。
+先点“运行合成演示”认识报告；再将一条你有权处理的**真实完整 JD**填进基础工作台，保存、选择岗位、分析。下载 `requirements_zh.csv` 核对逐条原文。演示数据与真实库隔离，摘要不能标成正文，真实模式也不等于来源已经第三方认证。
 
-## 第一次使用
+点击“进入自动采集 / 原文复核 / 附件与量化指标工作台”，可以创建采集任务、复核要求、上传个人证据、填写指标并生成个人报告。这些本地操作不需要模型 Key；搜索路线另需自己的 Brave Key 和相应使用权限。
 
-1. 点击“运行合成演示”熟悉报告；演示数据库与真实数据库隔离。
-2. 将获准处理的完整 JD、真实标题和来源填写进表单，确认完整性后保存。片段应标记为摘要。
-3. 选择岗位，点击“分析真实数据并生成报告”。
-4. 下载 `requirements_zh.csv`、`descriptions.md`、`role_descriptions.md` 和 `evidence_gaps.md`。
+## 当前到底能采集什么
 
-粘贴、JSON/JSONL/CSV 文件导入、演示与规则分析无需 API Key。CSV 可用 Excel 打开；当前不是 XLSX 导出。批量导入限制为 UTF-8、1 MB、1000 条，并先校验全部行。
+**准确定位：已实现搜索线索发现、有限受控的公开 HTML 正文抓取、授权 JSON 数据源接入，以及自动入库分析。不是“各大招聘网站已全面实站接通的专用爬虫”。**
 
-可选的在线搜索发现使用原有 Brave Search API，需要你自己的 `BRAVE_SEARCH_API_KEY`，并在页面确认本次请求预算。搜索结果是摘要线索，不是完整职位正文；工作台显示请求数、线索数与失败状态。环境变量需要在启动前设置，项目不自动加载 `.env`。
+| 路线 | 需要的输入 | 已实现 | 不代表什么 |
+|---|---|---|---|
+| 搜索 | 平台、岗位、Brave Key、预算 | 搜索引擎分页发现，再尝试获准正文 | 不是直接登录各站搜索；摘要不是 JD |
+| URL | 实际职位链接、访问范围 | HTTPS 获取、解析、去重和分析 | 不执行网页 JavaScript，不共享你的浏览器登录态 |
+| 数据源 | 实际授权 JSON API、契约、必要的 Token | 按约定字段和游标分页入库 | 任意招聘网址不能当 API；不是已认证官方平台适配器 |
 
-当前工作台没有招聘平台自动登录功能，也不需要你提交平台账号资料。平台配置表示域名检索支持，不等于已认证的平台接口或全量数据覆盖。公开正文可通过新增采集界面批量获取，沿用原 CLI 的显式访问控制与 robots 门控。
+8 个平台是**域名配置**，不是 8 项实站认证。页面需登录、验证码、robots 拒绝、动态渲染或未知结构时，现有 HTTP 抓取可能失败。自动测试用模拟上游，不能当作实际网站成功率。详情见 [采集能力说明](docs/ACQUISITION_CAPABILITIES.md)。
 
-## 报告怎么理解
+## 按目标阅读
 
-每次分析保存到独立目录。无正文、岗位未匹配、无已接受正向要求时会明确提示。基础页面预览最多 100 行要求；证据中心可按 50 条分页查看全部要求，下载文件包含全部结果。
+| 目标 | 文档 |
+|---|---|
+| 下载、安装、启动、第一条真实 JD、升级与备份 | [FIRST_RUN.md](docs/FIRST_RUN.md) |
+| 自动采集的字段、任务状态；原文、附件、指标和个人报告 | [WORKFLOWS.md](docs/WORKFLOWS.md) |
+| 现有能力、缺少什么、下一阶段逐站爬虫及验收 | [ACQUISITION_CAPABILITIES.md](docs/ACQUISITION_CAPABILITIES.md) |
+| 旧版 CLI、更多文件格式、自定义规则 | [README_CLI.md](README_CLI.md) |
+| 证据约束与规则升级保护 | [EVIDENCE_CONTRACT.md](docs/EVIDENCE_CONTRACT.md)、[REVIEW_GUARDRAILS.md](docs/REVIEW_GUARDRAILS.md) |
 
-通用能力并集不等于本人完全满足所有岗位。没有本人证据时，量化描述保留【待填】。量化指标应有基线、当前值、样本量、比较口径、观测窗口及证据引用。
+默认数据目录是用户主目录下 `.vibe-job-radar`。导出的证据包含个人数据；哈希只证明字节一致，不证明经历真实。服务只监听本机，不能直接当多人网站部署。不要把密码、Cookie、Token 放进 JD、截图、Issue 或仓库。
 
-候选人证据和人工复核现在可在“自动采集 / 证据中心”全程用表单完成。原 CLI 继续兼容，说明保留在 [README_CLI.md](README_CLI.md)。详细流程见 [WORKFLOWS.md](docs/WORKFLOWS.md)，基础入门见 [FIRST_RUN.md](docs/FIRST_RUN.md)。
-
-## 开发者
+## 开发验收
 
 ```bash
-python -m pip install -e .
-vibe-radar-ui --doctor
-vibe-radar-ui
-vibe-radar --help
 python scripts/run_tests.py --report acceptance/results.json
+python scripts/start_workbench.py --doctor
 python scripts/run_demo.py
 ```
 
-`vibe-radar-ui` 是新增入口，原命令兼容保留。源码启动不需要安装包。CI 增加 Windows/Linux Python 3.10、3.11、3.12 和 macOS Python 3.12 验证；通过状态以对应提交的 Actions 为准。
-
-自动测试使用人工编写的数据和模拟搜索响应，并实际执行本地 HTTP、SQLite 与分析管线。这不代表使用真实招聘平台账号或真实搜索密钥完成了线上采集认证。
-
-这是单用户本地应用，只监听 `127.0.0.1`。不要把端口开放到公网。退出后可以备份整个数据目录；本地文件未加密，请保管好系统账户和备份。
+安装为命令行工具是可选项：`python -m pip install -e .` 后可用 `vibe-radar-ui`、`vibe-radar`、`vibe-radar-collect`。Playwright 仅用于独立浏览器验收脚本，不是当前采集器的浏览器后端。以具体 commit 的 CI 结果为准，不将历史通过状态用于新版本。
