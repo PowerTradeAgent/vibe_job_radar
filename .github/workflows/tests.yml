@@ -25,6 +25,7 @@ jobs:
         run: |
           python -m pip install --no-deps .
           vibe-radar-ui --doctor --workspace .ci-installed-workspace
+          python -c "import importlib.metadata as m; from vibe_job_radar import __version__; assert m.version('vibe-job-radar') == __version__ == '0.2.0'"
           python -c "from importlib.resources import files; p=files('vibe_job_radar'); assert p.joinpath('workbench.html').is_file(); assert p.joinpath('workbench.js').is_file()"
       - name: Save test evidence
         if: always()

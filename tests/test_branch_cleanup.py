@@ -15,7 +15,7 @@ class CleanupTests(unittest.TestCase):
 
     def test_all_approved_heads_are_included_and_main_never_targeted(self):
         plan = MODULE.validate_plan(self.heads(), MAIN, [MODULE.BASE, HEAD], lambda *_: True)
-        self.assertEqual(len(plan), 4)
+        self.assertEqual(len(plan), 1)
         self.assertNotIn('main', plan)
         args = MODULE.push_arguments(plan)
         self.assertIn('--atomic', args)

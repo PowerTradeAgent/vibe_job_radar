@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vibe-job-radar"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Evidence-first Chinese recruiting requirement analysis and measurable profile drafting"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,13 +12,19 @@ license = {text = "MIT"}
 authors = [{name = "WEIYU AI Studio"}]
 dependencies = []
 
+[project.optional-dependencies]
+browser = ["playwright>=1.48,<2"]
+
 [project.scripts]
 vibe-radar = "vibe_job_radar.cli:main"
 vibe-radar-ui = "vibe_job_radar.workbench:main"
 vibe-radar-collect = "vibe_job_radar.collection:main"
 
+[tool.setuptools.dynamic]
+version = {attr = "vibe_job_radar._version.__version__"}
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-vibe_job_radar = ["defaults.json", "workbench.html", "workbench.js", "advanced.html", "advanced.js", "collection_help.js"]
+vibe_job_radar = ["defaults.json", "workbench.html", "workbench.js", "advanced.html", "advanced.js", "collection_help.js", "guided.html", "guided.js"]

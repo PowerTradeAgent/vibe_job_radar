@@ -1,6 +1,6 @@
-"""One-shot, user-approved issue #12 branch cleanup. Default is validation-only.
+"""One-shot, user-approved issue #16 branch cleanup. Default is validation-only.
 
-Only the recorded four branches qualify. All heads must be retained by main.
+Only the recorded guided-acquisition branch qualifies. All heads must be retained by main.
 Atomic Git deletion with exact leases rejects concurrently moved branches.
 This is repository maintenance, never part of the installed application.
 """
@@ -14,14 +14,10 @@ import subprocess
 from pathlib import Path
 
 REPOSITORY = 'saksim/vibe_job_radar'
-BASE = '8312039230a51a984ca7786b27a15188d265f275'
-ACTIVE = 'feat/collection-field-guidance'
-PRIOR_HEADS = {
-    'docs/zero-start-and-crawler-capabilities': '7be2b115b91fa49b1409744b49f50331ad9ad2e1',
-    'feat/acquisition-evidence-workflows': '45963fd4d746349374828ac551899305a2dd9da9',
-    'feat/local-workbench-onboarding': '26f1e2e7ea2a9d1cc9464ef79b14d62fdd871f99',
-}
-TITLE = 'Complete approved main-only cleanup (issue 12)'
+BASE = 'ead51d9c1371db770f91ab43b56848ba439f2b8d'
+ACTIVE = 'feat/guided-browser-acquisition'
+PRIOR_HEADS = {}
+TITLE = 'Merge approved guided acquisition and clean branches (issue 16)'
 
 
 def git(args, env):
@@ -44,7 +40,7 @@ def validate_plan(heads, main_sha, parents, ancestor):
         raise ValueError('Unrecorded branch exists; refuse deletion')
     plan = {}
     for branch, sha in expected.items():
-        if branch not in heads:  # Safe rerun: a previously deleted branch remains deleted.
+        if branch not in heads:
             continue
         if heads[branch] != sha or not ancestor(sha, main_sha):
             raise ValueError('Branch moved or is not fully included in main: ' + branch)
@@ -87,7 +83,6 @@ def main():
         env.update(GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='http.https://github.com/.extraheader',
                    GIT_CONFIG_VALUE_0='AUTHORIZATION: basic ' + auth, GIT_TERMINAL_PROMPT='0')
         if git(['remote', 'get-url', 'origin'], env) != 'https://github.com/' + REPOSITORY:
-            # actions/checkout may include the .git suffix; accept only these two literal URLs.
             if git(['remote', 'get-url', 'origin'], env) != 'https://github.com/' + REPOSITORY + '.git':
                 raise ValueError('Unexpected remote URL')
         if git(['rev-parse', 'HEAD'], env) != main_sha:
@@ -101,7 +96,6 @@ def main():
         plan = validate_plan(heads, main_sha, parents, ancestor)
         report['validated'] = plan
         if args.apply and plan:
-            # All refs are removed in one atomic push, each leased to its checked head.
             git(push_arguments(plan), env)
             report.update(applied=True, deleted=plan)
         after = remote_heads(env)
@@ -110,7 +104,6 @@ def main():
             raise ValueError('Final remote state is not main-only; inspect audit')
         report['success'] = True
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as exc:
-        # Git errors can contain remote diagnostics: avoid accidentally logging secrets.
         report['error_type'] = type(exc).__name__
         if isinstance(exc, ValueError):
             report['error'] = str(exc)

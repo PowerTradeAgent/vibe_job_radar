@@ -11,64 +11,37 @@ th,td{border:1px solid #dce3ec;padding:9px;text-align:left;vertical-align:top;mi
 footer{margin-top:30px;color:#536a83}@media(max-width:650px){main{margin:0;padding:16px;border:0}h1{font-size:24px}}
 </style></head><body><main>
 <p class="notice">这是操作指南，不是正在运行的工作台。本页不会执行命令、读取账户或自动联网。请在文件管理器中运行启动器，并保留终端窗口。</p>
-<h1>零基础操作指南：从下载到第一份真实报告</h1>
-<p>首次目标只有一个：在自己的电脑打开工作台，录入一条有权处理的真实职位描述并下载报告。先不配置任何爬虫账号、搜索密钥或模型。JD 就是招聘方写出的“岗位职责 + 任职要求”。</p>
-<h2>已经打开过工作台：直接更新，不要重装环境</h2>
-<p>已经使用 Anaconda/Python 成功启动的人，跳过第1节。先在旧终端按 Ctrl+C，停止后备份页面显示的完整数据目录（默认用户主目录下 <code>.vibe-job-radar</code>）。然后从 GitHub 的 <strong>main → Code → Download ZIP</strong> 下载并解压新源码；不要继续运行旧解压目录。</p>
-<p>进入新源码目录，沿用你已经成功的解释器。例如在 Git Bash 中使用现有 Anaconda 环境：</p>
+<h1>从零开始：先打开，再找岗位</h1>
+<p>本文适用于已合并到main的0.2.0源码版本。统一在main下载完整ZIP，历史功能分支已清理，不再使用旧评论中的分支下载链接。尚未创建正式GitHub Release/tag。需要Python 3.10或更新版本；不是免安装EXE。</p>
+<h2>1. 下载与启动</h2>
+<p>在GitHub仓库页选择本次版本的代码，点击Code → Download ZIP，将ZIP完整解压。不要只下载一个脚本，不要在压缩包里直接运行。解压后的目录应同时有scripts、src和start_windows.bat。</p>
+<p>已安装Python的Windows用户可双击start_windows.bat；没有Python时，先从Python官方安装程序安装3.10或更新版本。Windows终端可执行 <code>py -3 --version</code> 核对。macOS/Linux可执行 <code>python3 --version</code> 核对。</p>
+<p>你已用Anaconda启动成功时，完全不必重装。停止旧终端，再进入新源码目录，执行原来的命令：</p>
 <pre><code>/d/code_environment/anaconda_all_css/py312/python.exe scripts/start_workbench.py</code></pre>
-<p>这是本项目用户已验证可用的解释器路径示例，不要求其他电脑创建同名目录。路径不相同的用户使用自己的 Python；含空格时给解释器完整路径加引号。使用同一工作区即可保留原有数据，不要为了更新删掉数据库。</p>
-<p>打开本次终端给出的完整地址，再点首页的“进入自动采集 / 原文复核 / 附件与量化指标工作台”。不要沿用旧端口书签。看到下面三个入口即表示新的填写指引已经加载：<strong>我有职位链接：套用 URL 入门参数</strong>、<strong>我想先搜索：套用搜索入门参数</strong>、<strong>检查填写 / 预览计划（不采集）</strong>。若看不到，检查运行目录与旧进程，而不是反复安装 Python。</p>
-<h2>已进高级页但不知道怎么填：只选一条路线</h2>
-<div class="scroll"><table><thead><tr><th>你手上已有的东西</th><th>点哪个入口</th><th>第一轮填什么</th><th>不用填什么</th></tr></thead><tbody><tr><td>一条具体职位详情链接</td><td>我有职位链接：套用 URL 入门参数</td><td>1岗位、1平台、真实链接1条、正文预算1、复用24小时；按实际依据确认访问范围</td><td>搜索 Key、JSON 接口、契约、搜索预算</td></tr><tr><td>想让程序帮忙找职位链接</td><td>我想先搜索：套用搜索入门参数</td><td>自己的 Brave Key、1岗位、1平台、搜索预算1、页数1、正文预算0；核对搜索保存范围</td><td>事先整理的职位 URL、JSON 接口、正文许可</td></tr><tr><td>数据供应方给了接口和文档</td><td>授权 JSON 数据源</td><td>公网 HTTPS 接口、契约链接、必要的 Token、允许范围</td><td>不要拿招聘首页或搜索接口代替职位数据源</td></tr><tr><td>只有 JD 文本，没链接也没 Key</td><td>返回基础工作台</td><td>粘贴一条有权处理的完整 JD，保存再分析</td><td>一切搜索/数据源凭据</td></tr></tbody></table></div>
-<p><strong>网址从哪里来：</strong> 自己在招聘网站点进具体职位，Ctrl+L、Ctrl+C 复制地址栏。不是首页、搜索列表、本机 <code>/advanced</code> 或示例职位ID。<strong>Key从哪里来：</strong> 从 <a href="https://api-dashboard.search.brave.com/">Brave 官方控制台</a> 按其现行步骤开通 Search 并创建 API Key，填生成的密钥值，不是账户密码、密钥名称或网址。<strong>接口从哪里来：</strong> 由实际数据提供方给出；没有供应方时忽略该路线。</p>
-<p>点击入门参数后仍需自己填真实输入，按钮不会自动填授权、密钥或职位，也不会自动联网。先点“检查填写 / 预览计划（不采集）”，按字段提示补齐，再由你点“创建并自动执行”。预检不消耗外部 API 请求，也不验证网站可抓、密钥有效或授权成立。没有 Key 仍能预览计划，但不能发起搜索。</p>
-<p>搜索预算1不是只返回1条职位；正文预算0会<strong>故意只得到标题、链接和摘要</strong>，不能据此生成完整正文要求统计。遇到 empty/needs_attention 先查看具体请求与结果，不要马上提高预算。详细的逐格表、真实用途填写参考与错误对照见 <a href="docs/COLLECTION_FORM_CASES.md">采集表单案例</a>。</p>
-<p>恢复历史任务时，已进入正文/报告阶段的搜索任务无需再填 Brave Key。切换到数据源历史任务时先暂停让你填写该数据源 Token；只有提供方明确无需 Token 才可再次点击并确认无 Token 继续。程序不会复用上一种服务的密钥，也不会自动重试已经结束的任务。</p>
-<h2>1. 准备 Python（已有 3.10+ 可跳过）</h2>
-<p>Python 是运行本程序的软件环境。本项目不是独立 EXE；只安装浏览器还不够。当前跨平台 CI 测过 3.10、3.11、3.12，建议首次验证选 3.12。</p>
-<p><strong>Windows：</strong> 从 <a href="https://www.python.org/downloads/">Python 官方下载页</a> 获取 Python Install Manager 并安装。按 Windows 开始菜单，搜索“PowerShell”并打开，在窗口中粘贴下列命令，按回车：</p>
-<pre><code>pymanager install 3.12
-py -3.12 --version</code></pre>
-<p>第一条需要联网安装 Python。第二条应输出 <code>Python 3.12.x</code>。<code>pymanager</code> 是新版官方安装管理器命令；只有旧版 <code>py</code> 的电脑不能直接用它安装，应先安装官方管理器。已安装合适 Python 的电脑不必卸载或重装。多版本并存时，用下面固定版本的启动命令，避免双击入口选择了别的默认版本。</p>
-<p><strong>macOS：</strong> 从官方页面选择 macOS 安装包，按安装器步骤完成。打开“终端”，输入 <code>python3 --version</code>；输出须不低于 3.10。需要严格对应 CI 时选用 Python 3.12，并以 <code>python3.12</code> 启动。<strong>Linux：</strong> 用发行版支持的方式安装 Python 3.10+，在终端用同一命令确认版本。不要覆盖系统 Python。</p>
-<p>安装方式核对自 <a href="https://docs.python.org/3/using/windows.html">Python Windows 官方说明</a>，核对日期 2026-09-14。命令不存在时先解决 Python 安装，不要反复双击项目。</p>
-<h2>2. 下载完整 main，而不是单个脚本</h2>
-<p>用有仓库访问权限的账号打开 <a href="https://github.com/saksim/vibe_job_radar">项目仓库</a>。左上方分支选择 <code>main</code>，点击绿色 <strong>Code → Download ZIP</strong>。若是私有仓库，看不到内容时需要仓库所有者授予权限；安装 Python 不能解决 GitHub 权限问题。</p>
-<p>在下载目录找到 ZIP，右键“全部提取/解压”，打开解压后的项目文件夹。应同时看到 <code>README.md</code>、<code>start_windows.bat</code>、<code>START_HERE.html</code>、<code>scripts</code>、<code>src</code>、<code>docs</code>。<strong>不要在压缩包预览窗口里启动，也不要只下载一个 .py 文件。</strong></p>
-<p>解压后双击 <code>START_HERE.html</code> 可用浏览器阅读入门卡。它只是文档，打开它不会启动工作台。</p>
-<h2>3. 启动，识别两个窗口</h2>
-<p>Windows 单一 Python 环境可双击 <code>start_windows.bat</code>。固定 Python 3.12 的操作：在项目文件夹的地址栏输入 <code>powershell</code> 并回车，在出现的窗口运行：</p>
-<pre><code>py -3.12 scripts/start_workbench.py</code></pre>
-<p>macOS/Linux：在终端输入 <code>cd </code>（注意尾部空格），拖入解压后的项目文件夹得到实际路径，回车，再运行：</p>
-<pre><code>python3 scripts/start_workbench.py</code></pre>
-<p>应出现两个窗口：终端显示“本地工作台”和“数据目录”；浏览器显示“招聘要求 → 逐条证据 → 可量化描述”。终端负责运行程序，<strong>不要关闭它</strong>。浏览器只是操作界面。</p>
-<p>浏览器没自动打开时，复制终端整条地址，包括 <code>#token=...</code>，粘贴到本机浏览器地址栏。用启动器给出的 <code>127.0.0.1</code>，不要换成 <code>localhost</code>，不要把令牌地址给别人。默认端口每次可能不同，所以旧书签不一定可用。</p>
-<p>点击“环境自检（不联网）”。成功标志是返回 <code>workspace_writable: true</code>，且没有错误。<code>network_tested: false</code> 正常：自检并未测试招聘平台和密钥。</p>
-<h2>4. 先认识报告，再录入真实文本</h2>
-<p>点击“运行合成演示”。应看到“合成演示”、要求行和文件下载按钮；真实记录仍为 0，说明演示隔离正常。演示只用来认识界面，不能作为真实招聘统计。</p>
-<p>随后在你自己的招聘网页或 App 找到一条目标岗位。需要登录时在该网站/App 正常登录。本项目不读取那个浏览器的 Cookie。确认有权处理内容后填写：</p>
-<div class="scroll"><table><thead><tr><th>界面字段</th><th>填写方法</th><th>避免的错误</th></tr></thead><tbody><tr><td>职位名称</td><td>招聘方的实际标题</td><td>不要把无关岗位改名为“架构师”来制造匹配</td></tr><tr><td>来源平台</td><td>与原链接对应的平台；其他来源选手工来源</td><td>BOSS 链接不能选猎聘</td></tr><tr><td>招聘公司、城市</td><td>知道就填，不知道留空</td><td>不推测公司</td></tr><tr><td>职位来源链接</td><td>职位分享链接，不带账号凭据</td><td>不贴后台 Token 或 Cookie</td></tr><tr><td>来源说明</td><td>无链接时填写可追溯说明</td><td>不凭空编一个网页地址</td></tr><tr><td>原始岗位职责与任职要求</td><td>保留完整正文和段落</td><td>不混入聊天、其他人的简历或联系方式</td></tr><tr><td>证据完整性</td><td>完整 JD 选完整正文；片段选摘要</td><td>搜索摘要不能升级为完整 JD</td></tr><tr><td>来源与允许使用范围</td><td>实际来源、许可依据和使用目的</td><td>文字声明本身不是取得授权</td></tr></tbody></table></div>
-<p>完整正文须勾选完整性确认，再点“保存到真实数据库”。成功标志：提示已保存，记录数增加；重复相同内容时可能只增加观察、不增加快照。若岗位未匹配，核对原始标题和岗位配置，不要伪造职位名称。</p>
-<h2>5. 生成第一份真实报告</h2>
-<p>在“选择岗位与发现线索”中勾选对应岗位，然后点“分析真实数据并生成报告”。基础页面的平台复选框影响搜索发现；其分析按钮按岗位筛选现有数据。高级采集任务则还按所选平台筛选。</p>
-<p>检查报告模式不是合成演示，<code>正文岗位组</code> 至少为 1。确有 Vibe Coding 正向要求时应有对应原文行；合法的零命中也可能存在，不能为了有结果编造要求。</p>
-<p>先下载 <code>requirements_zh.csv</code>，在 Excel 中查看逐条原文；下载 <code>descriptions.md</code>、<code>role_descriptions.md</code> 和 <code>evidence_gaps.md</code> 查看描述及缺口。<code>.md</code> 是文本，可用记事本打开；下载 <code>dashboard.html</code> 后可用浏览器查看静态报告。当前不是 XLSX 输出。</p>
-<p>文件通常在浏览器下载目录；程序也把完整报告保存在界面显示的数据目录的 <code>reports/</code> 子目录。每次分析产生新目录，不覆盖旧报告。</p>
-<h2>6. 再做自己的证据，自动采集不是前置条件</h2>
-<p>从首页点“进入自动采集 / 原文复核 / 附件与量化指标工作台”。已有真实报告时，可直接跳过第一部分采集，使用第二至四部分：</p>
-<p>选择刚才的真实报告 → 加载原文要求 → 复核此条 → 勾选证据支持的要求 → 填项目与本人负责范围 → 上传附件或填写外部引用 → 添加真实指标 → 保存个人证据 → 生成个人报告。</p>
-<p>“校验并预览”不会自动保存指标；还要点“添加到当前证据”，最后点“保存个人证据”。只有真实证据充分时才选“本人已确认”，否则保存草稿。详见 <a href="docs/WORKFLOWS.md">采集与证据操作指南</a>。</p>
-<h2>7. 自动采集什么时候配置</h2>
-<p>三条采集路线都在高级页：搜索路线需自己的 Brave Key 与相应存储权限；URL 路线需要真实链接与允许的访问范围；数据源路线需要实际符合约定的 JSON API。<strong>都不等于自动登录各大网站。</strong> 首次建议只选一个平台、一个岗位、小预算，先看正文是否取得，再扩大范围。</p>
-<p>没有 Key、API 或允许自动访问的页面时，录入和证据分析仍可用。不要为了得到结果，随意勾选没有依据的许可。详细字段、凭据和限制见 <a href="docs/WORKFLOWS.md">WORKFLOWS.md</a> 与 <a href="docs/ACQUISITION_CAPABILITIES.md">采集能力说明</a>。</p>
-<h2>8. 常见问题对照</h2>
-<div class="scroll"><table><thead><tr><th>现象</th><th>先检查什么 / 怎么操作</th></tr></thead><tbody><tr><td>提示 Python 不存在</td><td>确认安装完成，重新打开终端，检查 <code>py -3.12 --version</code></td></tr><tr><td>报 <code>can&#x27;t open file</code></td><td>当前目录不对；应看到 scripts 和 src 文件夹后再启动</td></tr><tr><td>双击一闪而过或停在错误</td><td>在项目目录用固定版本命令启动，阅读错误；不要关闭安全软件</td></tr><tr><td>403、令牌无效</td><td>从本次终端重新复制完整地址，先打开基础页再进入高级页</td></tr><tr><td>地址连不上</td><td>终端是否还在运行；是否打开了旧端口；是否在另一台电脑访问</td></tr><tr><td>目录不可写</td><td>加 <code>--workspace</code> 指向自己的可写目录；不要用只读系统目录</td></tr><tr><td><code>permission_required</code></td><td>该来源没有在任务中获得正文访问许可；不是账号密码错误</td></tr><tr><td><code>robots_denied</code> / <code>robots_unavailable</code></td><td>当前实现停止自动访问；不可用包括 404，这是保守实现，不是法律结论</td></tr><tr><td><code>login_or_challenge</code> / 403 / 429</td><td>网站要求登录、验证或限制访问；当前程序不绕过，转授权渠道或手工输入</td></tr><tr><td><code>redirect_not_followed</code></td><td>当前不自动跳转；核对有权访问的最终职位 URL 后创建新任务</td></tr><tr><td><code>parse_error</code> / <code>not_html</code></td><td>不是可识别的独立 JD；普通网页、推荐列表、动态页面不一定可解析</td></tr><tr><td><code>invalid_feed_contract</code></td><td>API 不是约定 JSON 结构或字段不合法；不是任意网址都能当数据源</td></tr><tr><td>零正文 / 零要求</td><td>检查摘要、岗位、采集新鲜度、否定条款、input_audit.csv 与 review_queue.csv</td></tr><tr><td>证据版本冲突</td><td>刷新资料，核对其他标签页的修改后再保存，不强行覆盖</td></tr><tr><td>指标预览有值但报告无指标</td><td>是否添加到当前证据、保存为已确认、选中了同一来源报告</td></tr><tr><td>历史规则不兼容</td><td>重新分析，并重新复核/映射；系统不会偷偷重用已失效要求</td></tr></tbody></table></div>
-<p>出现错误时，保留不含密钥的错误文字、Python 版本和操作步骤。不要把登录令牌地址、账户凭据或含个人数据的完整工作区贴进 Issue。</p>
-<h2>9. 停止、升级、备份</h2>
-<p>在终端按 Ctrl+C 停止。Windows 启动器最后可能显示“按任意键继续”，此时服务已经结束。关闭浏览器不等于关闭本地服务；高级页关闭后不会驱动后续采集步骤，但已经发出的请求可能完成。</p>
-<p>默认数据目录：Windows 是 <code>%USERPROFILE%\.vibe-job-radar</code>，macOS/Linux 是 <code>~/.vibe-job-radar</code>；以工作台显示的实际路径为准。里面保存 jobs.sqlite、demo.sqlite、reports、imports、collections、evidence 等。<strong>停止服务后备份整个目录</strong>，不要只复制主 SQLite 文件而遗漏相关文件。</p>
-<p>升级时：停止服务 → 备份数据目录 → 把最新 main 源码解压到新的程序目录 → 以原来的 <code>--workspace</code> 启动 → 自检和查看历史。不要拿空演示目录覆盖真实数据。</p>
-<p>撤回证据不删除旧报告和审计历史；要彻底清理本机记录，先停止并备份，再处理整个工作区。个人证据 ZIP 是证据导出，不是包含全部 JD/数据库/任务状态的整机备份，也不是浏览器一键恢复格式。源码ZIP与数据备份是两件不同的事。</p>
+<p>其他Windows环境在源码目录运行 <code>py -3 scripts/start_workbench.py</code>；macOS/Linux运行 <code>python3 scripts/start_workbench.py</code>。Windows可在文件夹地址栏输入cmd并回车打开当前目录的终端。Git Bash用户右键空白处打开Git Bash后使用上面的Anaconda命令。</p>
+<p>浏览器自动打开时保持终端不关闭。没有自动打开，则复制终端中完整的127.0.0.1地址，包含#token后的部分。端口每次可能变化，旧书签未必可用；地址不要发给别人。工作台页面与采集浏览器是两个不同窗口。</p>
+<h2>2. 最简单的第一份结果：无账号、无API</h2>
+<p>点击“运行合成演示”，它是程序合成的测试数据，不是真实招聘。看懂结果后，在基础页粘贴一份你有权处理的真实完整JD，填写实际标题、平台、来源与使用范围，点击“保存到真实数据库”，再选岗位并点击“分析真实数据并生成报告”。</p>
+<p>下载requirements_zh.csv核对逐条原文；descriptions.md是模板，没有本人证据的数字应保持待填，不是程序已经证明你满足了岗位。演示库与真实库隔离。只拿到片段就标记摘要，不要为了有结果谎报为完整正文。</p>
+<h2>3. 不整理URL：使用新手采集向导</h2>
+<p>在首页点击“新手推荐：选平台 → 找岗位 → 勾选采集”。这条入口进入/guided，不是旧的/advanced大表单。</p>
+<p>第一次点击“安装 / 修复采集浏览器”，确认后程序使用当前Python下载Playwright与Chromium。网络和安装状态都在页面显示。没有此依赖时基础页仍能分析粘贴文本。</p>
+<p>按以下顺序操作，不需要自己准备一串职位链接：</p>
+<div class="scroll"><table><thead><tr><th>顺序</th><th>点击或填写</th><th>应看到什么</th></tr></thead><tbody><tr><td>1</td><td>平台选BOSS、猎聘或前程无忧；关键词填时间序列算法工程师；1页、5个岗位</td><td>使用范围和确认项，请按实际依据填写，不编造授权</td></tr><tr><td>2</td><td>点击“打开搜索并读取岗位”</td><td>弹出独立采集浏览器，或提示需要登录/处理页面</td></tr><tr><td>3</td><td>需要登录时点“打开登录浏览器 / 人工接管”</td><td>在网站原生页完成密码、短信或扫码，不把密码交给工作台</td></tr><tr><td>4</td><td>已打开网站列表时点“我已打开结果列表：读取当前列表”；只登录了则点“登录后重新搜索”</td><td>工作台出现自动识别的岗位卡片及详情链接</td></tr><tr><td>5</td><td>勾选岗位，再点“采集所选并生成报告”</td><td>顺序采集并显示每条结果；可下载CSV、模板和收集到的URL</td></tr></tbody></table></div>
+<p>完整逐步说明见<a href="docs/GUIDED_COLLECTION.md">浏览器采集按钮指南</a>。不能识别列表、robots拒绝、DNS非公网都不是靠增加预算解决。内置三站适配尚未实站认证，首次请从1页/1个岗位尝试。</p>
+<h2>4. 已有URL或搜索Key：旧入口仍然可用</h2>
+<p>高级工作台/advanced保留原来的三条路线，字段按路线隐藏。已有真实详情链接，点“我有职位链接：套用 URL 入门参数”；希望用搜索引擎找链接，点“我想先搜索：套用搜索入门参数”，填自己的Brave Search API Key。搜索入门参数为1次搜索、1页、正文预算0，只拿标题/链接/摘要。没有数据供应方的JSON接口，就忽略数据源路线。</p>
+<p>先点击“检查填写 / 预览计划（不采集）”核对缺项，再明确执行。预检不认证Key有效性，也不代表网站一定可取。旧URL方式不使用本次新浏览器会话。逐格案例见<a href="docs/COLLECTION_FORM_CASES.md">字段来源与案例</a>。</p>
+<h2>5. 填本人证据，生成个人描述</h2>
+<p>在高级页选择已生成的真实报告，点击“加载原文要求”。在完整原文中复核条目，上传自己的证据附件，填写项目、负责范围、阶段、指标基线与当前值、样本量、观察窗口和口径。勾选实际支持的要求，再点击“保存个人证据”。最后点击“生成个人报告”并下载。</p>
+<p>没证据时保存草稿；批准原文不等于自动满足岗位。离线测试不能冒充生产成绩，文件哈希只能证明字节一致。详细说明见<a href="docs/WORKFLOWS.md">采集与证据操作</a>。</p>
+<h2>6. 等待、停止、更新和数据保留</h2>
+<p>/guided的新任务由后端线程执行，关闭工作台网页不会取消已经确认的批次；暂停或停止按钮会停止后续动作。关闭终端将退出程序。登录Cookie只保留于本次采集浏览器，不写入任务，下次启动需重新登录。</p>
+<p>旧/advanced路线依然由网页连续驱动，关页后不再驱动后续步骤。两种入口的执行方式不同，不要把它们都理解成24小时定时服务。</p>
+<p>默认目录在用户主目录下.vibe-job-radar，基础页显示完整路径。保持同一工作区，重启或升级可以继续读取原数据；不同目录相互隔离。先停止服务，再备份整个目录，包括数据库、reports、guided、imports及个人证据。升级代码不等于删除数据，别用“清空工作区”来更新程序。</p>
+<p>0.2.0新增browser_fetch来源类型，旧版本不保证认识新记录；回退时恢复对应的完整备份。不要同时运行两份工作台操作同一任务。不要将本机端口开放公网。</p>
+<h2>7. 看错误，而不是反复点开始</h2>
+<div class="scroll"><table><thead><tr><th>现象</th><th>下一步</th></tr></thead><tbody><tr><td>找不到Python</td><td>检查安装/版本；已经能打开页面的人不需要再安装Python</td></tr><tr><td>页面没有新手向导入口</td><td>停止旧进程，确认完整新源码目录，重新启动，不是只刷新网页</td></tr><tr><td>缺令牌或403</td><td>从本次终端的完整地址重新进入，不要把127.0.0.1改成别的主机名</td></tr><tr><td>non_public_address或198.18开头</td><td>向导里点网络检查，核查代理Fake-IP/DNS。不是网站登录错误，不删除公网检查</td></tr><tr><td>0条卡片</td><td>在采集浏览器手动打开正确列表再读取；仍为空可能是适配不兼容</td></tr><tr><td>robots拒绝或403/429</td><td>停止并核对访问条件/冷却，不加预算、不换身份反复访问</td></tr><tr><td>安装失败</td><td>核查下载网络、磁盘与Python权限；本地粘贴分析仍可用</td></tr><tr><td>报告为空</td><td>看正文数、岗位匹配和条目失败原因；不代表市场没有需求</td></tr></tbody></table></div>
+<p>页面默认15秒导航间隔与共享配额，显示等候不是卡死。网络诊断只查DNS，不能修复代理；登录只处理身份，不会解决页面结构或访问规则。全部操作和剩余边界见<a href="docs/GUIDED_COLLECTION.md">浏览器采集按钮指南</a>。</p>
 <footer>本页由 scripts/build_user_guide.py 从 docs/FIRST_RUN.md 生成。更新正文后重新生成；不要单独修改本页。</footer>
 </main></body></html>

@@ -132,3 +132,7 @@ dist_native/
 
 # User-owned SITE source is maintained outside the GD-PVP release boundary.
 /apps/gdpvp-site/
+
+# Browser state is local-only; never version login sessions.
+playwright/.auth/
+.browser-state/

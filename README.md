@@ -1,69 +1,67 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-**已打开高级页但不知道怎么填？先看 [URL 与搜索 API 逐格填写案例](docs/COLLECTION_FORM_CASES.md)，新版页面也提供就地提示和不采集预检。**
+**0.2.0 新手入口：在首页点击“新手推荐：选平台 → 找岗位 → 勾选采集”，无需先整理职位 URL。** 详见[按按钮操作指南](docs/GUIDED_COLLECTION.md)。新增可选真实浏览器后端，平台原生页面人工登录后继续自动采集；三站页面配置尚未实站认证。原高级表单和本地分析继续保留。
 
-将获准处理的招聘文本变成逐条要求，再与自己的项目、附件和量化指标关联，生成描述、覆盖矩阵与缺口清单。
+**当前代码与说明统一从 main 获取。** 0.2.0 为源码版本，尚未创建正式 GitHub Release/tag；不是包含 Python 和 Chromium 的免安装 EXE。
 
-**先看这里：下载完整 main 源码并解压，双击 [START_HERE.html](START_HERE.html) 阅读浏览器版入门指南；完整步骤见 [零基础操作指南](docs/FIRST_RUN.md)。无需学习 Git、JSON、Docker 或数据库。仍需安装 Python，并非免安装 EXE。**
+## 已经打开过工作台
 
-## 已经用过旧版：如何拿到新页面
-
-只使用 `main` 分支。先停止旧终端并备份工作区，再下载 main 的完整 ZIP、解压到新目录，用原来能工作的 Python 启动。**不需要更换 Anaconda 环境。** 首页进入高级页后，应看到两个“套用入门参数”按钮和“检查填写 / 预览计划（不采集）”。只刷新旧页面不会更新正在运行的代码。
-
-第一次操作先选1岗位/1平台。已有链接走 URL（正文预算1，无需 Key）；没有链接走搜索（自己的 Brave Key、搜索预算1、页数1、正文预算0）；没有数据供应方就不选 JSON 数据源。字段的来源、留空项及失败处理见 [逐格填写案例](docs/COLLECTION_FORM_CASES.md)。
-
-## 最短启动路线
-
-电脑已有 Python 3.10+ 时：Windows 双击 `start_windows.bat`；macOS/Linux 在源码目录运行：
+先停止旧终端并备份工作区，完整解压新版本源码，进入新目录，沿用已成功的解释器启动。例如：
 
 ```bash
-python3 scripts/start_workbench.py
+/d/code_environment/anaconda_all_css/py312/python.exe scripts/start_workbench.py
 ```
 
-Windows 也可在源码目录执行：
+不需要更换 Anaconda 环境。打开本次终端给出的完整地址，从首页进入 `/guided` 新手向导。只刷新旧网页不会更新运行中的代码。完整更新与首次安装说明见 [FIRST_RUN.md](docs/FIRST_RUN.md)，或双击源码中的 [START_HERE.html](START_HERE.html)。
 
-```powershell
-py -3 scripts/start_workbench.py
-```
+## 想让程序自己找岗位
 
-浏览器未自动打开时，复制终端中的完整本地地址（包含 `#token`）。不要分享地址；保持终端运行，Ctrl+C 停止。源码运行无需 pip 安装，核心程序无第三方运行依赖。当前 CI 覆盖 Windows/Linux Python 3.10～3.12、macOS Python 3.12，其他组合不由这组 CI 保证。
+在新手向导中先安装可选采集浏览器，再选择平台、关键词、1页/5条和实际访问范围。点击“打开搜索并读取岗位”。需要登录时，操作程序弹出的独立采集浏览器，在平台原生页正常登录，然后回向导读取当前列表。勾选岗位，点击“采集所选并生成报告”。
 
-## 第一个实际结果
+程序负责汇总列表观察到的链接、打开详情、保存最终地址和独立正文、生成本批报告。你不必填写 API endpoint、分页游标、选择器，也不必逐条复制详情 URL。没有稳定链接或结构不兼容的页面需要逐站维护，不会编造结果。
 
-先点“运行合成演示”认识报告；再将一条你有权处理的**真实完整 JD**填进基础工作台，保存、选择岗位、分析。下载 `requirements_zh.csv` 核对逐条原文。演示数据与真实库隔离，摘要不能标成正文，真实模式也不等于来源已经第三方认证。
+**本次不接收或自动填写账号密码。** 平台原生页面的人工登录已经接入，完成后复用当前内存会话继续采集；退出服务不保存 Cookie。三站均为 `not_live_verified`，没有你的现场授权与真实样本不能宣称全部实测成功。
 
-点击“进入自动采集 / 原文复核 / 附件与量化指标工作台”，可以创建采集任务、复核要求、上传个人证据、填写指标并生成个人报告。这些本地操作不需要模型 Key；搜索路线另需自己的 Brave Key 和相应使用权限。
+## 不需要浏览器采集，也能使用
 
-## 当前到底能采集什么
+本地粘贴、导入和规则分析不需要任何 Key 或额外运行依赖。先点击“运行合成演示”认识报告，再粘贴你有权处理的真实完整 JD，保存并分析。下载 `requirements_zh.csv` 核对逐条原文。
 
-**准确定位：已实现搜索线索发现、有限受控的公开 HTML 正文抓取、授权 JSON 数据源接入，以及自动入库分析。不是“各大招聘网站已全面实站接通的专用爬虫”。**
+原 `/advanced` 保留 URL、Brave Search API 和授权 JSON 数据源路线。已有链接走 URL；想用搜索服务找链接，需要自己的 Brave Key；没有数据供应方就不选 JSON 接口。见 [逐格填写案例](docs/COLLECTION_FORM_CASES.md)。旧 HTTP 路线不共享新向导的浏览器会话。
 
-| 路线 | 需要的输入 | 已实现 | 不代表什么 |
-|---|---|---|---|
-| 搜索 | 平台、岗位、Brave Key、预算 | 搜索引擎分页发现，再尝试获准正文 | 不是直接登录各站搜索；摘要不是 JD |
-| URL | 实际职位链接、访问范围 | HTTPS 获取、解析、去重和分析 | 不执行网页 JavaScript，不共享你的浏览器登录态 |
-| 数据源 | 实际授权 JSON API、契约、必要的 Token | 按约定字段和游标分页入库 | 任意招聘网址不能当 API；不是已认证官方平台适配器 |
+高级页同时提供原文复核、个人项目、附件和指标、精确要求映射、个人报告与证据包。没有本人证据的数字保持待填，能力覆盖率不是胜任度或录用概率。
 
-8 个平台是**域名配置**，不是 8 项实站认证。页面需登录、验证码、robots 拒绝、动态渲染或未知结构时，现有 HTTP 抓取可能失败。自动测试用模拟上游，不能当作实际网站成功率。详情见 [采集能力说明](docs/ACQUISITION_CAPABILITIES.md)。
+## 强制频次与运行边界
 
-## 按目标阅读
+新向导默认页面导航至少15秒、60次/小时、200次/滚动24小时；经桥接的HTTP请求至少0.5秒、600次/小时、3000次/滚动24小时。同一工作区和站点的任务共享持久化配额，失败不退回，限流触发冷却，界面不能提高上限。
+
+新向导的当前批次由后端线程执行，关工作台网页仍继续；暂停/停止控制任务，关闭终端退出服务。旧高级页仍由网页驱动后续步骤。这不是开机自启的长期调度服务。
+
+浏览器请求保留公网DNS/IP绑定、TLS和域名边界。Fake-IP导致的 `non_public_address` 现在可以点击网络检查查看地址，但不会通过关闭安全检查来修复。验证码、robots拒绝、资源域名或页面结构变化仍可能中止采集。
+
+## 使用说明与开发契约
 
 | 目标 | 文档 |
 |---|---|
-| 下载、安装、启动、第一条真实 JD、升级与备份 | [FIRST_RUN.md](docs/FIRST_RUN.md) |
-| 自动采集的字段、任务状态；原文、附件、指标和个人报告 | [WORKFLOWS.md](docs/WORKFLOWS.md) |
-| 现有能力、缺少什么、下一阶段逐站爬虫及验收 | [ACQUISITION_CAPABILITIES.md](docs/ACQUISITION_CAPABILITIES.md) |
-| 旧版 CLI、更多文件格式、自定义规则 | [README_CLI.md](README_CLI.md) |
-| 证据约束与规则升级保护 | [EVIDENCE_CONTRACT.md](docs/EVIDENCE_CONTRACT.md)、[REVIEW_GUARDRAILS.md](docs/REVIEW_GUARDRAILS.md) |
+| 安装、更新、启动和第一份结果 | [零基础指南](docs/FIRST_RUN.md) |
+| 不整理URL，按按钮找岗位 | [浏览器采集向导](docs/GUIDED_COLLECTION.md) |
+| 原有URL/Search/JSON表单 | [字段来源和填写案例](docs/COLLECTION_FORM_CASES.md) |
+| 采集和本人证据操作 | [操作手册](docs/WORKFLOWS.md) |
+| 已实现和未认证的边界 | [采集能力](docs/ACQUISITION_CAPABILITIES.md) |
+| Pythonic 插件与接口 | [插件契约](docs/BROWSER_PLUGIN_CONTRACT.md) |
+| 升级和源码合并说明 | [0.2.0 说明](docs/RELEASE_0_2_0.md) |
 
-默认数据目录是用户主目录下 `.vibe-job-radar`。导出的证据包含个人数据；哈希只证明字节一致，不证明经历真实。服务只监听本机，不能直接当多人网站部署。不要把密码、Cookie、Token 放进 JD、截图、Issue 或仓库。
+## 启动与验收
 
-## 开发验收
+Windows可双击 `start_windows.bat` 或执行 `py -3 scripts/start_workbench.py`；macOS/Linux执行 `python3 scripts/start_workbench.py`。Python需3.10+。默认数据保存在用户主目录 `.vibe-job-radar`，停止服务后备份整个目录，升级时不要清空。
 
 ```bash
 python scripts/run_tests.py --report acceptance/results.json
 python scripts/start_workbench.py --doctor
 python scripts/run_demo.py
+# 已安装可选浏览器依赖后，运行受控双浏览器测试
+python scripts/run_guided_browser.py
 ```
 
-安装为命令行工具是可选项：`python -m pip install -e .` 后可用 `vibe-radar-ui`、`vibe-radar`、`vibe-radar-collect`。Playwright 仅用于独立浏览器验收脚本，不是当前采集器的浏览器后端。以具体 commit 的 CI 结果为准，不将历史通过状态用于新版本。
+安装CLI是可选项：`python -m pip install -e .`。Playwright只在启用浏览器功能时需要，可在向导里安装。自动测试使用人工职位与模拟上游，不能替代真实招聘网站认证；以对应提交的CI为准。
+
+旧CLI文档完整保留在 [README_CLI.md](README_CLI.md)。服务仅监听本机，不适用于公网多人部署。升级新增的 `browser_fetch` 来源不保证旧版本认识，回退时恢复相应完整工作区备份。

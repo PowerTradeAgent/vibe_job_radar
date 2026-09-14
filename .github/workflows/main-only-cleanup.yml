@@ -22,7 +22,7 @@ jobs:
       - run: python -m unittest discover -s tests -p test_branch_cleanup.py -v
   approved-cleanup:
     if: >-
-      github.event_name == 'push' && github.repository == 'saksim/vibe_job_radar' && startsWith(github.event.head_commit.message, 'Complete approved main-only cleanup (issue 12)')
+      github.event_name == 'push' && github.repository == 'saksim/vibe_job_radar' && startsWith(github.event.head_commit.message, 'Merge approved guided acquisition and clean branches (issue 16)')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
