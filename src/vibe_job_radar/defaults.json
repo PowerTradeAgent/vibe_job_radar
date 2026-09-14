@@ -1,0 +1,355 @@
+{
+  "platforms": {
+    "boss": {
+      "label": "BOSS直聘",
+      "domains": [
+        "zhipin.com"
+      ]
+    },
+    "liepin": {
+      "label": "猎聘",
+      "domains": [
+        "liepin.com"
+      ]
+    },
+    "51job": {
+      "label": "前程无忧",
+      "domains": [
+        "51job.com"
+      ]
+    },
+    "zhaopin": {
+      "label": "智联招聘",
+      "domains": [
+        "zhaopin.com"
+      ]
+    },
+    "lagou": {
+      "label": "拉勾",
+      "domains": [
+        "lagou.com"
+      ]
+    },
+    "maimai": {
+      "label": "脉脉",
+      "domains": [
+        "maimai.cn"
+      ]
+    },
+    "nowcoder": {
+      "label": "牛客",
+      "domains": [
+        "nowcoder.com"
+      ]
+    },
+    "shixiseng": {
+      "label": "实习僧",
+      "domains": [
+        "shixiseng.com"
+      ]
+    }
+  },
+  "roles": {
+    "domain_algorithm": {
+      "label": "垂直领域算法工程师",
+      "query_terms": [
+        "垂直领域算法工程师",
+        "电力算法工程师"
+      ],
+      "title_terms": [
+        "垂直领域算法",
+        "电力算法",
+        "能源算法",
+        "电价算法",
+        "行业算法"
+      ],
+      "fallback_title_terms": [
+        "算法工程师",
+        "机器学习工程师"
+      ],
+      "body_terms": [
+        "电力",
+        "能源",
+        "行业知识",
+        "垂直领域",
+        "业务约束"
+      ]
+    },
+    "time_series": {
+      "label": "时间序列算法工程师",
+      "query_terms": [
+        "时间序列算法工程师",
+        "时序预测算法工程师"
+      ],
+      "title_terms": [
+        "时间序列",
+        "时序预测",
+        "预测算法",
+        "负荷预测"
+      ],
+      "fallback_title_terms": [
+        "算法工程师",
+        "机器学习工程师"
+      ],
+      "body_terms": [
+        "时间序列",
+        "时序预测",
+        "滚动回测",
+        "负荷预测"
+      ]
+    },
+    "architect": {
+      "label": "架构师",
+      "query_terms": [
+        "架构师",
+        "技术架构师"
+      ],
+      "title_terms": [
+        "架构师",
+        "架构工程师",
+        "技术负责人",
+        "architecture",
+        "architect"
+      ],
+      "fallback_title_terms": [],
+      "body_terms": []
+    }
+  },
+  "direct_patterns": [
+    "vibe[\\s\\-]*coding",
+    "AI[\\s\\-]*(?:辅助|原生|驱动)?\\s*(?:编程|编码|开发)",
+    "AI[\\s\\-]*(?:assisted|native|driven)?[\\s\\-]*coding",
+    "大模型.{0,8}(?:编程|写代码)",
+    "coding[\\s\\-]*agents?",
+    "氛围(?:式)?编程",
+    "(?:大模型|大语言模型|LLM|ChatGPT|Claude|Gemini|DeepSeek).{0,16}(?:生成代码|编写代码|代码生成|代码重构|辅助编程)"
+  ],
+  "tools": {
+    "Cursor": "(?<![A-Za-z0-9_])Cursor(?![A-Za-z0-9_])",
+    "Claude Code": "(?<![A-Za-z0-9_])Claude\\s*Code(?![A-Za-z0-9_])",
+    "Codex": "(?<![A-Za-z0-9_])Codex(?![A-Za-z0-9_])",
+    "GitHub Copilot": "(?<![A-Za-z0-9_])(?:GitHub\\s*)?Copilot(?![A-Za-z0-9_])",
+    "Windsurf": "(?<![A-Za-z0-9_])Windsurf(?![A-Za-z0-9_])",
+    "Trae": "(?<![A-Za-z0-9_])Trae(?![A-Za-z0-9_])",
+    "Cline": "(?<![A-Za-z0-9_])Cline(?![A-Za-z0-9_])",
+    "Aider": "(?<![A-Za-z0-9_])Aider(?![A-Za-z0-9_])",
+    "Qoder": "(?<![A-Za-z0-9_])Qoder(?![A-Za-z0-9_])",
+    "Roo Code": "(?<![A-Za-z0-9_])Roo\\s*Code(?![A-Za-z0-9_])",
+    "通义灵码": "(?<![A-Za-z0-9_])通义灵码(?![A-Za-z0-9_])",
+    "CodeBuddy": "(?<![A-Za-z0-9_])CodeBuddy(?![A-Za-z0-9_])"
+  },
+  "capabilities": {
+    "ai_coding": {
+      "label": "AI 原生工程交付",
+      "patterns": [
+        "vibe[\\s\\-]*coding",
+        "AI\\s*(?:辅助|原生|驱动)?\\s*(?:编程|编码|开发)",
+        "大模型.{0,8}(?:编程|写代码)",
+        "coding\\s*agent"
+      ],
+      "description": "以需求澄清、可执行规格、增量实现与验收证据组织 AI 辅助交付",
+      "metric_ids": [
+        "cycle_time_hours",
+        "accepted_change_rate"
+      ]
+    },
+    "tool_fluency": {
+      "label": "编码工具实战",
+      "patterns": [],
+      "description": "依据任务边界选择并使用【真实使用过的工具】，对生成代码执行理解、修改与验证",
+      "metric_ids": [
+        "accepted_change_rate",
+        "cost_per_accepted_change"
+      ]
+    },
+    "spec_context": {
+      "label": "规格与上下文工程",
+      "patterns": [
+        "上下文",
+        "提示词",
+        "prompt",
+        "\\bspec\\b",
+        "规格",
+        "需求拆解",
+        "需求澄清",
+        "验收标准",
+        "AGENTS\\.md"
+      ],
+      "description": "将业务目标拆解为规格、接口契约、任务边界和可执行验收标准，并维护项目上下文",
+      "metric_ids": [
+        "first_acceptance_rate",
+        "cycle_time_hours"
+      ]
+    },
+    "agent_orchestration": {
+      "label": "Agent 编排与工具链",
+      "patterns": [
+        "\\bMCP\\b",
+        "\\bagent\\b",
+        "智能体",
+        "多代理",
+        "工具调用",
+        "编排",
+        "\\bskill[s]?\\b"
+      ],
+      "description": "通过任务分解、工具权限、执行反馈与人工检查点组织编码 Agent 协作",
+      "metric_ids": [
+        "agent_task_success_rate",
+        "cost_per_accepted_change"
+      ]
+    },
+    "testing_review": {
+      "label": "测试、审查与可靠性",
+      "patterns": [
+        "单元测试",
+        "回归测试",
+        "测试覆盖",
+        "代码审查",
+        "code\\s*review",
+        "pytest",
+        "评测",
+        "幻觉",
+        "\\bTDD\\b",
+        "可复现",
+        "理解.{0,5}代码",
+        "审查"
+      ],
+      "description": "对 AI 生成实现建立代码审查、自动化测试与失败样本回归机制",
+      "metric_ids": [
+        "test_pass_rate",
+        "reproducibility_rate"
+      ]
+    },
+    "delivery_ops": {
+      "label": "发布、可观测与回滚",
+      "patterns": [
+        "CI\\s*/?\\s*CD",
+        "灰度",
+        "回滚",
+        "可观测",
+        "\\bSLO\\b",
+        "部署",
+        "监控",
+        "上线",
+        "发布",
+        "告警"
+      ],
+      "description": "将交付纳入版本管理、持续集成、可观测验证与可回滚发布流程",
+      "metric_ids": [
+        "availability_rate",
+        "rollback_minutes"
+      ]
+    },
+    "architecture": {
+      "label": "架构与技术治理",
+      "patterns": [
+        "架构",
+        "接口契约",
+        "模块边界",
+        "解耦",
+        "分布式",
+        "性能优化",
+        "技术债",
+        "遗留系统",
+        "兼容",
+        "高并发"
+      ],
+      "description": "围绕模块边界、接口契约、兼容约束与性能预算评审 AI 生成方案",
+      "metric_ids": [
+        "p95_latency_ms",
+        "cycle_time_hours"
+      ]
+    },
+    "time_series": {
+      "label": "时间序列与评测方法",
+      "patterns": [
+        "时间序列",
+        "时序预测",
+        "滚动回测",
+        "数据泄漏",
+        "未来信息",
+        "\\bWAPE\\b",
+        "\\bMAPE\\b",
+        "\\bMAE\\b",
+        "预测误差",
+        "forecast"
+      ],
+      "description": "在时间序列任务中落实预测时点、时间切分、防泄漏检查、滚动回测与误差分层评估",
+      "metric_ids": [
+        "wape_pct",
+        "reproducibility_rate"
+      ]
+    },
+    "domain_modeling": {
+      "label": "垂直领域与业务闭环",
+      "patterns": [
+        "垂直领域",
+        "业务约束",
+        "业务规则",
+        "行业知识",
+        "业务指标",
+        "业务价值",
+        "电力",
+        "能源",
+        "负荷",
+        "电价",
+        "供需",
+        "风控"
+      ],
+      "description": "将领域规则、数据口径与业务约束转化为可验证的建模及工程契约",
+      "metric_ids": [
+        "business_constraint_pass_rate",
+        "wape_pct"
+      ]
+    },
+    "security": {
+      "label": "数据安全与使用边界",
+      "patterns": [
+        "安全",
+        "敏感",
+        "隐私",
+        "脱敏",
+        "密钥",
+        "权限",
+        "客户数据",
+        "源代码.{0,6}(?:外传|上传)",
+        "合规"
+      ],
+      "description": "明确数据、源码、密钥和工具权限边界，建立脱敏、审查与受控使用流程",
+      "metric_ids": [
+        "security_check_pass_rate"
+      ]
+    },
+    "productivity": {
+      "label": "交付效率与成本度量",
+      "patterns": [
+        "效率",
+        "效能",
+        "交付周期",
+        "成本",
+        "吞吐",
+        "提效",
+        "人效"
+      ],
+      "description": "使用同口径基线、样本量和观察窗口评估交付周期、有效产出与成本",
+      "metric_ids": [
+        "cycle_time_hours",
+        "cost_per_accepted_change"
+      ]
+    }
+  },
+  "query_groups": [
+    "(\"vibe coding\" OR \"AI编程\")",
+    "(\"AI辅助开发\" OR \"AI Coding\")",
+    "(\"Cursor\" OR \"Claude Code\")",
+    "(\"Codex\" OR \"Copilot\" OR \"Trae\")",
+    "(\"coding agent\" OR \"AI编码\")"
+  ],
+  "common_threshold": 0.6,
+  "weights": {
+    "required": 3,
+    "expected": 2,
+    "preferred": 1,
+    "unspecified": 1
+  }
+}

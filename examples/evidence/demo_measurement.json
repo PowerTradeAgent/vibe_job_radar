@@ -1,0 +1,8 @@
+{
+  "is_synthetic": true,
+  "notice": "These are arbitrary test inputs, not personal or production results.",
+  "baseline_cycle_hours": 10,
+  "current_cycle_hours": 6,
+  "baseline_n": 20,
+  "current_n": 20
+}

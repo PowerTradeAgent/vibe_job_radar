@@ -1,0 +1,134 @@
+# 日志文件
+*.log
+*.logs
+logs/
+logs_*.logs
+
+# 环境变量
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+
+# 密钥和证书
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Docker
+.dockerenv
+docker-compose.override.yml
+.docker/
+
+# Docker 数据卷（本地开发）
+docker/mysql_data/
+docker/redis_data/
+
+# 敏感配置
+config/secrets/
+*.secret
+config/*.runtime.env
+
+# 示例配置（用于参考，实际配置不提交）
+config/im_adapters/*.yaml.example
+config/models/*.yaml.example
+
+# 临时文件
+*.tmp
+*.bak
+*.orig
+*.pytest_
+.pytest_tmp/
+.tmp_pytest*/
+catboost_info/
+xgboost_info/
+
+# 测试覆盖率
+.coverage
+htmlcov/
+.pytest_cache/
+.verify/
+
+# 类型检查
+.mypy_cache/
+.pytype/
+
+# 数据
+*.csv
+!examples/online/guangdong_scope_projection_sample.csv
+*.xlsx
+*.xls
+*.txt
+!requirements.txt
+*.pdf
+*.tar
+*.rar
+*.7z
+*.zip
+*.tar.gz
+*.gz
+
+# 其他垃圾数据
+*.tmp_*
+output/
+outputs/
+!outputs/
+outputs/*
+!outputs/first_class_capability_matrix/
+outputs/first_class_capability_matrix/*
+!outputs/first_class_capability_matrix/first_class_capability_matrix_report.json
+*.joblib
+*tests_round*
+*tests_iter*
+*test_round*
+*test_iter*
+artifacts/
+protected_build/
+dist_native/
+.tmp_soenc*/
+.tmp_remote_kms_customer_ops_closure*/
+.worktrees/
+
+# User-owned SITE source is maintained outside the GD-PVP release boundary.
+/apps/gdpvp-site/
