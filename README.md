@@ -2,7 +2,7 @@
 
 **0.2.0 新手入口：在首页点击“新手推荐：选平台 → 找岗位 → 勾选采集”，无需先整理职位 URL。** 详见[按按钮操作指南](docs/GUIDED_COLLECTION.md)。新增可选真实浏览器后端，平台原生页面人工登录后继续自动采集；三站页面配置尚未实站认证。原高级表单和本地分析继续保留。
 
-**发布状态：本 PR 合并前请从 PR 页面取得 0.2.0 候选源码；合并后统一使用 main。** 候选源码包不是包含 Python 和 Chromium 的免安装 EXE。
+**当前代码与说明统一从 main 获取。** 0.2.0 为源码版本，尚未创建正式 GitHub Release/tag；不是包含 Python 和 Chromium 的免安装 EXE。
 
 ## 已经打开过工作台
 
@@ -48,7 +48,7 @@
 | 采集和本人证据操作 | [操作手册](docs/WORKFLOWS.md) |
 | 已实现和未认证的边界 | [采集能力](docs/ACQUISITION_CAPABILITIES.md) |
 | Pythonic 插件与接口 | [插件契约](docs/BROWSER_PLUGIN_CONTRACT.md) |
-| 升级和发布候选说明 | [0.2.0 候选说明](docs/RELEASE_0_2_0.md) |
+| 升级和源码合并说明 | [0.2.0 说明](docs/RELEASE_0_2_0.md) |
 
 ## 启动与验收
 
