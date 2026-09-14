@@ -158,7 +158,11 @@ def descriptions(summary: list[dict], requirements: list[Requirement], matrix: l
     for e in evidence:
         text += f"### {e['project']} / {SCOPES[e['scope']]}\n\n"
         text += f"来源：{e['evidence_ref']}；人工确认人：{e['reviewer']}；证据状态：{e['integrity_status']}。\n\n"
+        if e.get("contribution"):
+            text += "本人负责范围：" + e["contribution"] + "。\n\n"
         for m in e.get("metrics", []):
+            if m.get("baseline") is not None:
+                text += f"基线样本量：{m.get('baseline_sample_size')}；基线观察窗口：{m.get('baseline_window')}。\n\n"
             text += format_metric(m) + "。\n\n"
         text += "这些是输入方确认的观测值；文件哈希校验仅证明文件一致性，不证明内容真实，也不证明变化由 AI 单独导致。\n\n"
     role_text = "# 分岗位描述模板\n\n> " + banner + "；所有【】字段须填写真实信息。\n\n"

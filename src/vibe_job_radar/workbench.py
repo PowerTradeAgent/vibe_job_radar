@@ -14,6 +14,8 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 from .workspace import InputError, Workspace
+from .collection import Collector
+from .evidence_ui import Conflict, EvidenceService
 
 MAX_BODY = 2_000_000
 
@@ -24,6 +26,8 @@ class LocalServer(ThreadingHTTPServer):
 
     def __init__(self, workspace: Workspace, port: int = 0):
         self.workspace = workspace
+        self.collector = Collector(workspace)
+        self.evidence = EvidenceService(workspace)
         self.token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()
         super().__init__(("127.0.0.1", port), Handler)
@@ -83,14 +87,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/", "/app.js"}
+        public = path in {"/", "/app.js", "/advanced", "/advanced.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = "workbench.html" if path == "/" else "workbench.js"
-                mime = "text/html" if path == "/" else "text/javascript"
+                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js"}[path]
+                mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
+            elif path == "/api/evidence/export":
+                self._respond(200, self.server.evidence.export(), "application/zip", filename="personal-evidence.zip")
+            elif path.startswith("/api/evidence/attachment/"):
+                artifact = self.server.evidence._artifact_path(path.removeprefix("/api/evidence/attachment/"))
+                self._respond(200, artifact.read_bytes(), "application/octet-stream", filename=artifact.name)
             elif path == "/api/status":
                 self._json(200, self.server.workspace.status())
             elif path == "/api/doctor":
@@ -143,6 +152,13 @@ class Handler(BaseHTTPRequestHandler):
         route = urlsplit(self.path).path
         methods = {"/api/job": "add_job", "/api/import": "import_file", "/api/plan": "plan",
                    "/api/discover": "discover", "/api/analyze": "analyze"}
+        target = self.server.workspace
+        if route.startswith("/api/evidence/"):
+            target = self.server.evidence
+            methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "review", "upload", "metric", "save", "remove", "generate")}
+        elif route.startswith("/api/collection/"):
+            target = self.server.collector
+            methods = {"/api/collection/" + name: name for name in ("start", "step", "status", "list", "register")}
         if route not in methods:
             self._json(404, {"error": "入口不存在。"})
             return
@@ -150,8 +166,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(409, {"error": "已有操作执行中，请勿重复提交。"})
             return
         try:
-            result = getattr(self.server.workspace, methods[route])(data)
+            result = getattr(target, methods[route])(data)
             status, response = 200, result
+        except Conflict as exc:
+            status, response = 409, {"error": str(exc)}
         except InputError as exc:
             status, response = 400, {"error": str(exc)}
         except (ValueError, TypeError) as exc:
