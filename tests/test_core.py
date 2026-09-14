@@ -348,7 +348,7 @@ class StorePipelineTests(unittest.TestCase):
         self.add(job(title="架构师<script>alert(1)</script>", text='=HYPERLINK("x") 使用Cursor编程。'))
         out = self.root / "run"
         analyze(self.db, out, as_of=NOW)
-        rendered = (out/"dashboard.html").read_text()
+        rendered = (out/"dashboard.html").read_text(encoding="utf-8")
         self.assertNotIn("<script>alert(1)</script>", rendered)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", rendered)
         self.assertEqual(csv_cell("=1+1"), "'=1+1")
@@ -357,7 +357,7 @@ class StorePipelineTests(unittest.TestCase):
         self.add(job())
         out = self.root / "run"
         analyze(self.db, out, as_of=NOW)
-        text = (out/"descriptions.md").read_text()
+        text = (out/"descriptions.md").read_text(encoding="utf-8")
         self.assertIn("尚未提供", text)
         self.assertNotIn("提升80%", text)
 
