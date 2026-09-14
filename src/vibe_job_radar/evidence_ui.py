@@ -152,6 +152,19 @@ class EvidenceService:
         validate(config)
         return manifest, rows, jobs, config
 
+    @staticmethod
+    def _reviews_for_run(state, run_id):
+        """Read report-scoped keys plus legacy rid-only entries without rewriting history."""
+        selected = {}
+        prefix = run_id + ":"
+        for key, review in state["reviews"].items():
+            if review.get("source_run_id") == run_id and ":" not in key:
+                selected[key] = review
+        for key, review in state["reviews"].items():
+            if key.startswith(prefix) and review.get("source_run_id") == run_id:
+                selected[key[len(prefix):]] = review
+        return selected
+
     def catalogue(self, data):
         run_id = text_field(data, "run_id", required=True, limit=32)
         _, rows, jobs, source_config = self._source(run_id)
@@ -159,6 +172,7 @@ class EvidenceService:
         page = number(data, "page", 0, 100000)
         state = self.state()
         source = {j.record_id: j for j in jobs}
+        reviews = self._reviews_for_run(state, run_id)
         if query:
             rows = [r for r in rows if query in (r["quote"] + r["title"] + r["capability"]).casefold()]
         total = len(rows)
@@ -167,7 +181,7 @@ class EvidenceService:
             if job.text[row["start"]:row["end"]] != row["quote"]:
                 raise InputError("原文偏移校验失败。")
             row["source_text"] = job.text
-            row["saved_review"] = state["reviews"].get(row["requirement_id"])
+            row["saved_review"] = reviews.get(row["requirement_id"])
         return {"rows": rows[page * 50:page * 50 + 50], "page": page, "total": total,
                 "revision": state["revision"], "page_size": 50,
                 "capabilities": {k: v["label"] for k, v in source_config["capabilities"].items()}}
@@ -183,7 +197,13 @@ class EvidenceService:
             raise InputError("复核决定无效。")
         record = {"decision": decision, "reviewer": text_field(data, "reviewer", required=True),
                   "reason": text_field(data, "reason", required=True), "reviewed_at": utc_now(), "source_run_id": run_id}
-        return self._write(data.get("expected_revision"), f"review:{rid}:{decision}", lambda state: state["reviews"].update({rid: record}))
+        def mutate(state):
+            # Legacy records have source_run_id but use only rid as the key.
+            # Migrate only this report's entry; another report must not be removed.
+            if state["reviews"].get(rid, {}).get("source_run_id") == run_id:
+                del state["reviews"][rid]
+            state["reviews"][run_id + ":" + rid] = record
+        return self._write(data.get("expected_revision"), f"review:{run_id}:{rid}:{decision}", mutate)
 
     def metric(self, data):
         allowed = {"metric_id", "baseline", "current", "sample_size", "baseline_sample_size", "window", "baseline_window", "comparison_basis"}
@@ -294,8 +314,7 @@ class EvidenceService:
         # Only explicitly mapped source-report evidence participates. Other
         # reports remain editable/exportable but do not contaminate this one.
         state["evidence"] = [e for e in state["evidence"] if e["source_run_id"] == run_id]
-        state["reviews"] = {rid: review for rid, review in state["reviews"].items()
-                            if review.get("source_run_id") == run_id}
+        state["reviews"] = self._reviews_for_run(state, run_id)
         ident = uuid.uuid4().hex
         output = self.workspace.root / "reports" / ident
         with tempfile.TemporaryDirectory(prefix=".evidence-input-", dir=output.parent) as tmp:
@@ -353,7 +372,24 @@ class EvidenceService:
                 else:
                     e["evidence_ref"] = e.get("external_url", "")
             archive.writestr("candidate.json", json_text(candidate))
-            archive.writestr("reviews.json", json_text(state["reviews"]))
+            run_ids = {r.get("source_run_id", "") for r in state["reviews"].values()}
+            run_ids.update(e.get("source_run_id", "") for e in candidate["evidence"])
+            run_ids = sorted(r for r in run_ids if re.fullmatch(r"[a-f0-9]{32}", r))
+            by_report = {r: self._reviews_for_run(state, r) for r in run_ids}
+            archive.writestr("reviews.by_report.json", json_text(by_report))
+            # A root CLI file is unambiguous only for at most one source report.
+            if len(run_ids) <= 1:
+                archive.writestr("reviews.json", json_text(by_report[run_ids[0]] if run_ids else {}))
+            for run_id in run_ids:
+                scoped = {"name": candidate["name"], "evidence": copy.deepcopy([
+                    e for e in candidate["evidence"] if e.get("source_run_id") == run_id])}
+                for e in scoped["evidence"]:
+                    if e.get("artifact_id"):
+                        e["evidence_ref"] = "../../artifacts/" + e["artifact_id"]
+                archive.writestr(f"reports/{run_id}/candidate.json", json_text(scoped))
+                archive.writestr(f"reports/{run_id}/reviews.json", json_text(by_report[run_id]))
             archive.writestr("revision.json", json_text({"revision": state["revision"], "history": state["history"]}))
-            archive.writestr("README.txt", "个人证据导出；包含个人数据，请妥善保管。哈希只校验文件一致性，不证明经历真实性。\n")
+            archive.writestr("README.txt", "个人证据导出；包含个人数据，请妥善保管。哈希只校验文件一致性，不证明经历真实性。\n"
+                            "多报告时分别使用 reports/<来源报告ID>/candidate.json 与 reviews.json；根目录不合并冲突决定。\n"
+                            "reviews.by_report.json 按来源报告保存复核；使用原 CLI 时应匹配对应来源数据与配置。\n")
         return output.getvalue()
