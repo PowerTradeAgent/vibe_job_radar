@@ -1,4 +1,4 @@
-"""One-shot, user-approved PR #11 branch cleanup. Default is validation-only.
+"""One-shot, user-approved issue #12 branch cleanup. Default is validation-only.
 
 Only the recorded four branches qualify. All heads must be retained by main.
 Atomic Git deletion with exact leases rejects concurrently moved branches.
@@ -14,14 +14,14 @@ import subprocess
 from pathlib import Path
 
 REPOSITORY = 'saksim/vibe_job_radar'
-BASE = 'bfec740ad75e09aa92786093932d8762971852e8'
+BASE = '8312039230a51a984ca7786b27a15188d265f275'
 ACTIVE = 'feat/collection-field-guidance'
 PRIOR_HEADS = {
     'docs/zero-start-and-crawler-capabilities': '7be2b115b91fa49b1409744b49f50331ad9ad2e1',
     'feat/acquisition-evidence-workflows': '45963fd4d746349374828ac551899305a2dd9da9',
     'feat/local-workbench-onboarding': '26f1e2e7ea2a9d1cc9464ef79b14d62fdd871f99',
 }
-TITLE = 'Merge PR #11: finalize onboarding and main-only cleanup'
+TITLE = 'Complete approved main-only cleanup (issue 12)'
 
 
 def git(args, env):

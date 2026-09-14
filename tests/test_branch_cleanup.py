@@ -44,3 +44,11 @@ class CleanupTests(unittest.TestCase):
 
     def test_safe_rerun_accepts_already_removed_refs(self):
         self.assertEqual(MODULE.validate_plan({'main': MAIN}, MAIN, [MODULE.BASE, HEAD], lambda *_: True), {})
+
+    def test_workflow_condition_is_a_literal_block_and_pr_validation_is_enabled(self):
+        source = (Path(__file__).resolve().parents[1]/'.github/workflows/main-only-cleanup.yml').read_text(encoding='utf-8')
+        self.assertIn("if: >-\n      github.event_name == 'push'", source)
+        self.assertIn("startsWith(github.event.head_commit.message, '" + MODULE.TITLE + "')", source)
+        self.assertIn('  pull_request:', source)
+        self.assertIn("if: github.event_name == 'pull_request'", source)
+        self.assertIn('python -m unittest discover -s tests -p test_branch_cleanup.py -v', source)
