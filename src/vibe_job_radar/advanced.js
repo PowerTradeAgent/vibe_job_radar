@@ -114,7 +114,36 @@ function showCollection(s){activeCollection=s.id;$("collect-progress").textConte
 async function continueCollection(){if(busy||collecting)return;collecting=true;looping=true;updateButtons();try{while(looping){const s=await api("/api/collection/step",{id:activeCollection,api_key:$("collect-form").elements.api_key.value});showCollection(s);if(["completed","needs_attention","empty"].includes(s.status)){looping=false;$("collect-form").elements.api_key.value="";note(`采集结束：${s.status}。请核对各平台失败和预算跳过项。`);await refreshProfile();break;}await new Promise(resolve=>setTimeout(resolve,30));}}catch(error){note(error.message);looping=false;}finally{looping=false;try{await refreshCollections();}catch(error){note(error.message);}finally{collecting=false;updateButtons();}}}
 $("collect-form").onsubmit=async event=>{event.preventDefault();if(collecting||busy)return;let created=false;await act(async()=>{const d=collectionGuide.data();const check=await api("/api/collection/preview",d);collectionGuide.render(check);if(!check.ready)return;delete d.api_key;showCollection(await api("/api/collection/start",d));await refreshCollections();created=true;});if(created)await continueCollection();};
 $("collect-pause").onclick=()=>{looping=false;note("已请求暂停；当前请求结束后不再发出下一次请求。任务进度已保留。");};
-$("collect-resume").onclick=async()=>{if(collecting||busy)return;activeCollection=$("collect-history").value||activeCollection;if(!activeCollection){note("请先创建或选择一个任务。");return;}let resume=false;await act(async()=>{const saved=await api("/api/collection/status",{id:activeCollection});collectionGuide.selectMode(saved.mode);showCollection(saved);if(saved.mode==="search"&&!$("collect-form").elements.api_key.value.trim()&&!collectionGuide.keyConfigured)throw new Error("所选任务是搜索任务：请先填入自己的Brave Key，再点击继续；任务尚未执行。");resume=true;});if(resume)await continueCollection();};
+$("collect-resume").onclick=async()=>{
+  if(collecting||busy)return;
+  activeCollection=$("collect-history").value||activeCollection;
+  if(!activeCollection){note("请先创建或选择一个任务。");return;}
+  let resume=false;
+  await act(async()=>{
+    const saved=await api("/api/collection/status",{id:activeCollection});
+    const switched=$("collect-form").elements.mode.value!==saved.mode;
+    collectionGuide.selectMode(saved.mode);
+    showCollection(saved);
+    if(["completed","needs_attention","empty"].includes(saved.status)){
+      note("所选任务已经结束；继续不会重试已结束的请求。需要重试时请核对原因后新建任务。");
+      return;
+    }
+    const key=$("collect-form").elements.api_key.value.trim();
+    // Credentials are required by the current phase, not by the original route.
+    if(saved.phase==="search"&&!key&&!collectionGuide.keyConfigured)
+      throw new Error("所选任务仍在搜索阶段：请先填入自己的 Brave Key，再点击继续；任务尚未执行。");
+    if(saved.phase==="feed"&&switched){
+      note("已切换到数据源任务，尚未发出请求。请补填该数据源 Token 后再点继续；只有提供方明确无需 Token 时才确认无 Token 继续。");
+      return;
+    }
+    if(saved.phase==="feed"&&!key&&!window.confirm("未填写数据源 Token。只有提供方明确允许无需 Token 访问时，才确认无 Token 继续；否则点取消，先填 Token。")){
+      note("已取消继续；未发出采集请求，未消耗任务预算。请补填数据源 Token。");
+      return;
+    }
+    resume=true;
+  });
+  if(resume)await continueCollection();
+};
 $("collect-load").onclick=()=>act(async()=>showCollection(await api("/api/collection/status",{id:$("collect-history").value})));
 $("collect-refresh").onclick=()=>act(refreshCollections);
 $("platform-form").onsubmit=event=>{event.preventDefault();act(async()=>{const result=await api("/api/collection/register",Object.fromEntries(new FormData(event.target)));await init();note(result.message);});};

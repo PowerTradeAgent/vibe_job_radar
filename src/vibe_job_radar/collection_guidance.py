@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import os
+import ipaddress
 import re
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from .config import platform_for_url
 from .discovery import build_plan
@@ -35,6 +36,13 @@ def url_hint(value: str, *, detail: bool = False) -> str:
     host = parsed.hostname or ""
     if host in {"127.0.0.1", "localhost", "::1"} or host.endswith(".localhost"):
         raise InputError("这是本机地址，不是招聘网站的职位详情地址。")
+    # Literal IP validation is local: never resolve DNS during form preview.
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
+        raise InputError("这是非公网 IP 地址，当前采集器不会访问；请向提供方索取可用的公网 HTTPS 地址。")
     if host.endswith((".invalid", ".example", ".test")) or host in {"example.com", "example.org", "example.net"}:
         raise InputError("这是示例域名，不是真实数据源；请换成自己的实际地址。")
     if detail and (parsed.path in {"", "/", "/job_detail/", "/web/geek/jobs"} or host == "search.51job.com"):
@@ -159,7 +167,9 @@ def preview(workspace, data: dict) -> dict:
                 fail(field, "请向实际的数据提供方索取；没有现成接口就不要选这条路线，不能用招聘首页代替。")
             else:
                 try:
-                    url_hint(value)
+                    normalized = url_hint(value)
+                    if field == "endpoint" and any(k == "cursor" for k, _ in parse_qsl(urlsplit(normalized).query, keep_blank_values=True)):
+                        raise InputError("请移除数据源地址中的 cursor 参数；分页游标由程序管理，不要复制已翻页的接口地址。")
                 except InputError as exc:
                     fail(field, str(exc))
         credential_configured = bool(data.get("api_key"))

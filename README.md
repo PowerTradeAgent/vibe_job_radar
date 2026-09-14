@@ -6,6 +6,12 @@
 
 **先看这里：下载完整 main 源码并解压，双击 [START_HERE.html](START_HERE.html) 阅读浏览器版入门指南；完整步骤见 [零基础操作指南](docs/FIRST_RUN.md)。无需学习 Git、JSON、Docker 或数据库。仍需安装 Python，并非免安装 EXE。**
 
+## 已经用过旧版：如何拿到新页面
+
+只使用 `main` 分支。先停止旧终端并备份工作区，再下载 main 的完整 ZIP、解压到新目录，用原来能工作的 Python 启动。**不需要更换 Anaconda 环境。** 首页进入高级页后，应看到两个“套用入门参数”按钮和“检查填写 / 预览计划（不采集）”。只刷新旧页面不会更新正在运行的代码。
+
+第一次操作先选1岗位/1平台。已有链接走 URL（正文预算1，无需 Key）；没有链接走搜索（自己的 Brave Key、搜索预算1、页数1、正文预算0）；没有数据供应方就不选 JSON 数据源。字段的来源、留空项及失败处理见 [逐格填写案例](docs/COLLECTION_FORM_CASES.md)。
+
 ## 最短启动路线
 
 电脑已有 Python 3.10+ 时：Windows 双击 `start_windows.bat`；macOS/Linux 在源码目录运行：

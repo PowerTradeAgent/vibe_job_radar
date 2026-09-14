@@ -1,0 +1,32 @@
+name: approved-main-only-cleanup
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/main-only-cleanup.yml']
+permissions:
+  contents: read
+jobs:
+  approved-cleanup:
+    if: github.repository == 'saksim/vibe_job_radar' && startsWith(github.event.head_commit.message, 'Merge PR #11: finalize onboarding and main-only cleanup')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate all approved heads then atomically remove merged branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/cleanup_merged_branches.py --apply
+      - name: Retain before-and-after branch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-only-cleanup-audit
+          path: branch-cleanup-audit.json
