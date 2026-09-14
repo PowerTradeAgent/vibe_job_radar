@@ -1,0 +1,45 @@
+name: browser-installation-health
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  real-browser-health:
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            playwright: playwright==1.57.0
+            label: windows-1.57
+          - os: ubuntu-latest
+            playwright: playwright==1.57.0
+            label: linux-1.57
+          - os: ubuntu-latest
+            playwright: playwright>=1.48,<2
+            label: linux-current
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install selected SDK and its browser binary separately
+        run: |
+          python -m pip install "${{ matrix.playwright }}"
+          python -m playwright install --with-deps chromium
+      - name: Exercise visible collector check on Windows
+        if: runner.os == 'Windows'
+        run: python scripts/run_browser_health_acceptance.py
+      - name: Exercise visible collector check on Linux desktop
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python scripts/run_browser_health_acceptance.py
+      - name: Keep startup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-health-${{ matrix.label }}
+          path: browser-acceptance/browser-health/

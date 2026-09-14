@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import html
+import importlib
+from pathlib import Path
 import json
 import re
 from http.cookies import SimpleCookie
@@ -10,6 +12,8 @@ from urllib.parse import urljoin, urlsplit
 from ..utils import domain_matches
 from .contracts import CrawlError, PageSnapshot
 from .transport import PinnedTransport
+from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
+                             failed_report, supported_version, safe_text)
 
 
 class PlaywrightBackend:
@@ -23,24 +27,43 @@ class PlaywrightBackend:
         self.redirects = 0
         self.resource_denials = set()
         self._pagination_page = None
+        self.startup_report = environment_report()
+        self.startup_report['mode'] = 'headless' if headless else 'headed'
         try:
+            self.startup_report['stage'] = 'import'
+            importlib.invalidate_caches()
             from playwright.sync_api import sync_playwright
+            if not supported_version(self.startup_report['playwright_version']):
+                raise BrowserStartupError(failed_report(self.startup_report, RuntimeError('unsupported Playwright version'), code='playwright_incompatible'))
+            self.startup_report['stage'] = 'driver'
             self.runtime = sync_playwright().start()
+            expected = str(executable_path or self.runtime.chromium.executable_path)
+            self.startup_report.update(stage='executable', executable_path=safe_text(expected),
+                                       executable_exists=Path(expected).is_file())
+            # Headed collection needs the regular Chromium build, not only the
+            # separately installed headless shell. Test backends can select a path.
+            if (not headless or executable_path) and not self.startup_report['executable_exists']:
+                raise BrowserStartupError(failed_report(self.startup_report, FileNotFoundError(expected), code='browser_executable_missing'))
             args = ['--disable-background-networking', '--disable-quic', '--disable-sync',
                     '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']
-            options = {'headless': headless, 'args': args}
+            options = {'headless': headless, 'args': args, 'timeout': 30000}
             if executable_path:
                 options['executable_path'] = executable_path
+            self.startup_report.update(stage='launch', launch_tested=True)
             self.browser = self.runtime.chromium.launch(**options)
+            self.startup_report['stage'] = 'context'
             self.context = self.browser.new_context(service_workers='block', accept_downloads=False)
             self.context.route('**/*', self._route)
             self.context.route_web_socket('**/*', lambda ws: ws.close())
             self.context.on('page', self._bind_page)
             self.page = self.context.new_page()
             self.page.set_default_timeout(6000)
+            self.startup_report.update(stage='ready', code='browser_ready', ready=True,
+                message=HEALTH_MESSAGES['browser_ready'])
         except Exception as exc:
+            report = exc.report if isinstance(exc, BrowserStartupError) else failed_report(self.startup_report, exc)
             self.close()
-            raise CrawlError('browser_missing') from exc
+            raise BrowserStartupError(report) from exc
 
     def _bind_page(self, page):
         page.on('download', lambda download: download.cancel())

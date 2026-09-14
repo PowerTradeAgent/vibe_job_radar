@@ -226,10 +226,16 @@ class ServiceTests(unittest.TestCase):
             self.assertFalse(other.state()['jobs'][0]['browser_open'])
         finally:other.close()
     def test_install_uses_fixed_command_same_python_no_shell(self):
-        with patch('vibe_job_radar.guided.service.subprocess.run') as run:
-            run.return_value.returncode=0
+        import sys
+        from vibe_job_radar.guided.browser_install import CommandResult
+        from vibe_job_radar.guided.browser_health import environment_report
+        with patch.object(self.service, '_installer', return_value=CommandResult(0, 'installed')) as run, \
+             patch.object(self.service, '_health_probe', return_value={**environment_report(), 'ready': True, 'message': 'verified'}) as probe:
             self.service.install({'consent':True});self.wait()
-        self.assertEqual(run.call_count,2);self.assertFalse(run.call_args.kwargs['shell'])
+        self.assertEqual(run.call_count,2)
+        self.assertEqual(run.call_args_list[0].args[0], [sys.executable, '-m', 'pip', 'install', 'playwright>=1.48,<2'])
+        self.assertEqual(run.call_args_list[1].args[0], [sys.executable, '-m', 'playwright', 'install', 'chromium'])
+        probe.assert_called_once()
         self.assertEqual(self.service.state()['installation'],'installed')
     def test_diagnosis_only_queries_selected_registry_host(self):
         with patch('vibe_job_radar.guided.service.diagnose_host',return_value={'passed':True}) as diagnose:

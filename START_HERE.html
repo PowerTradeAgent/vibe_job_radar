@@ -25,7 +25,7 @@ footer{margin-top:30px;color:#536a83}@media(max-width:650px){main{margin:0;paddi
 <p>下载requirements_zh.csv核对逐条原文；descriptions.md是模板，没有本人证据的数字应保持待填，不是程序已经证明你满足了岗位。演示库与真实库隔离。只拿到片段就标记摘要，不要为了有结果谎报为完整正文。</p>
 <h2>3. 不整理URL：使用新手采集向导</h2>
 <p>在首页点击“新手推荐：选平台 → 找岗位 → 勾选采集”。这条入口进入/guided，不是旧的/advanced大表单。</p>
-<p>第一次点击“安装 / 修复采集浏览器”，确认后程序使用当前Python下载Playwright与Chromium。网络和安装状态都在页面显示。没有此依赖时基础页仍能分析粘贴文本。</p>
+<p>第一次先点“检查浏览器（不采集）”，再按需点击“安装 / 修复采集浏览器”，确认后程序使用当前Python下载Playwright与Chromium。网络和安装状态都在页面显示。没有此依赖时基础页仍能分析粘贴文本。</p>
 <p>按以下顺序操作，不需要自己准备一串职位链接：</p>
 <div class="scroll"><table><thead><tr><th>顺序</th><th>点击或填写</th><th>应看到什么</th></tr></thead><tbody><tr><td>1</td><td>平台选BOSS、猎聘或前程无忧；关键词填时间序列算法工程师；1页、5个岗位</td><td>使用范围和确认项，请按实际依据填写，不编造授权</td></tr><tr><td>2</td><td>点击“打开搜索并读取岗位”</td><td>弹出独立采集浏览器，或提示需要登录/处理页面</td></tr><tr><td>3</td><td>需要登录时点“打开登录浏览器 / 人工接管”</td><td>在网站原生页完成密码、短信或扫码，不把密码交给工作台</td></tr><tr><td>4</td><td>已打开网站列表时点“我已打开结果列表：读取当前列表”；只登录了则点“登录后重新搜索”</td><td>工作台出现自动识别的岗位卡片及详情链接</td></tr><tr><td>5</td><td>勾选岗位，再点“采集所选并生成报告”</td><td>顺序采集并显示每条结果；可下载CSV、模板和收集到的URL</td></tr></tbody></table></div>
 <p>完整逐步说明见<a href="docs/GUIDED_COLLECTION.md">浏览器采集按钮指南</a>。不能识别列表、robots拒绝、DNS非公网都不是靠增加预算解决。内置三站适配尚未实站认证，首次请从1页/1个岗位尝试。</p>
@@ -43,5 +43,7 @@ footer{margin-top:30px;color:#536a83}@media(max-width:650px){main{margin:0;paddi
 <h2>7. 看错误，而不是反复点开始</h2>
 <div class="scroll"><table><thead><tr><th>现象</th><th>下一步</th></tr></thead><tbody><tr><td>找不到Python</td><td>检查安装/版本；已经能打开页面的人不需要再安装Python</td></tr><tr><td>页面没有新手向导入口</td><td>停止旧进程，确认完整新源码目录，重新启动，不是只刷新网页</td></tr><tr><td>缺令牌或403</td><td>从本次终端的完整地址重新进入，不要把127.0.0.1改成别的主机名</td></tr><tr><td>non_public_address或198.18开头</td><td>向导里点网络检查，核查代理Fake-IP/DNS。不是网站登录错误，不删除公网检查</td></tr><tr><td>0条卡片</td><td>在采集浏览器手动打开正确列表再读取；仍为空可能是适配不兼容</td></tr><tr><td>robots拒绝或403/429</td><td>停止并核对访问条件/冷却，不加预算、不换身份反复访问</td></tr><tr><td>安装失败</td><td>核查下载网络、磁盘与Python权限；本地粘贴分析仍可用</td></tr><tr><td>报告为空</td><td>看正文数、岗位匹配和条目失败原因；不代表市场没有需求</td></tr></tbody></table></div>
 <p>页面默认15秒导航间隔与共享配额，显示等候不是卡死。网络诊断只查DNS，不能修复代理；登录只处理身份，不会解决页面结构或访问规则。全部操作和剩余边界见<a href="docs/GUIDED_COLLECTION.md">浏览器采集按钮指南</a>。</p>
+<h2>浏览器未就绪时不要继续改DNS</h2>
+<p>Playwright控制库与配套Chromium浏览器是两层安装。<code>pip install Chromium</code>不是安装浏览器；使用同一解释器的<code>-m playwright install chromium</code>。新版界面会检查真实可执行文件和空白页启动，显示分阶段原因与脱敏日志。完整命令和逐按钮排障见<a href="docs/BROWSER_SETUP.md">浏览器安装与启动修复</a>。</p>
 <footer>本页由 scripts/build_user_guide.py 从 docs/FIRST_RUN.md 生成。更新正文后重新生成；不要单独修改本页。</footer>
 </main></body></html>

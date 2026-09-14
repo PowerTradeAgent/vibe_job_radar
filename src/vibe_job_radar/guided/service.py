@@ -30,6 +30,9 @@ from .browser import PlaywrightBackend
 from .contracts import CrawlError
 from .rate import RateLedger, RateLimit
 from .transport import diagnose_host
+from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
+                             failed_report, probe_browser, safe_text)
+from .browser_install import install_commands, run_command
 
 MESSAGES = {
     'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
@@ -75,10 +78,12 @@ MESSAGES = {
     'dependency_install_failed': '浏览器组件安装失败。检查网络/磁盘权限后重试，原本地分析仍可使用。',
 }
 
+MESSAGES.update(HEALTH_MESSAGES)
+
 
 class GuidedService:
     def __init__(self, workspace, *, registry: Registry | None = None, backend_factory=PlaywrightBackend,
-                 ledger: RateLedger | None = None):
+                 ledger: RateLedger | None = None, health_probe=probe_browser, installer=run_command):
         self.workspace = workspace
         self.root = workspace.root / 'guided'
         self.root.mkdir(exist_ok=True, mode=0o700)
@@ -96,6 +101,9 @@ class GuidedService:
         self._backends = {}
         self._thread = None
         self._last_install = 'not_started'
+        self._health_probe, self._installer = health_probe, installer
+        self._browser_health = environment_report()
+        self._setup = {'stage': 'idle', 'message': '请先检查浏览器；DNS检查与浏览器检查是两回事。', 'steps': []}
 
     def _path(self, ident):
         if not isinstance(ident, str) or not re.fullmatch(r'[a-f0-9]{32}', ident):
@@ -152,6 +160,7 @@ class GuidedService:
             return {'jobs': jobs, 'busy': self._busy, 'active': self._active,
                     'sites': self.registry.describe(), 'limits': asdict(self.ledger.limits),
                     'browser_package': self._package(), 'installation': self._last_install,
+                    'browser_health': copy.deepcopy(self._browser_health), 'setup': copy.deepcopy(self._setup),
                     'python': sys.executable, 'roles': {k: v['label'] for k,v in self.workspace.config['roles'].items()},
                     'sessions_persisted': False, 'external_site_certification': False}
 
@@ -234,8 +243,61 @@ class GuidedService:
     def install(self, data):
         if data.get('consent') is not True:
             raise InputError('安装会用当前Python下载Playwright和Chromium；请先确认。')
-        self._submit('install')
+        self._submit_setup('install')
         return {'queued': True}
+
+    def _submit_setup(self, action):
+        with self._lock:
+            if self._busy:
+                raise InputError('已有动作正在运行，请结束后再检查或安装。')
+            if self._backends:
+                raise InputError('请先点“停止并关闭登录会话”，再检查或安装。不会擅自关闭你的登录浏览器。')
+            self._browser_health = environment_report()
+            self._setup = {'stage': 'queued', 'message': '已排队准备浏览器组件检查。', 'steps': []}
+            self._submit(action)
+
+    def check_browser(self, data):
+        if data:
+            raise InputError('检查不接受网址、命令或浏览器路径参数。')
+        self._submit_setup('check_browser')
+        return {'queued': True, 'network_scope': 'blank local page only; no job requests'}
+
+    def _check_browser(self):
+        with self._lock:
+            self._setup.update(stage='launch_check', message='正在实际打开并关闭空白采集浏览器，不访问招聘网站。')
+        report = self._health_probe()
+        with self._lock:
+            self._browser_health = report
+            self._setup.update(stage='ready' if report['ready'] else 'failed', message=report['message'])
+        return report
+
+    def _install_browser(self):
+        self._last_install = 'installing'
+        labels = {'package_install': '正在安装/检查 Playwright Python 包。',
+                  'browser_download': '正在通过 Playwright 下载配套 Chromium，不是 pip install Chromium。'}
+        for stage, command in install_commands():
+            step = {'stage': stage, 'log': '', 'returncode': None}
+            with self._lock:
+                self._setup.update(stage=stage, message=labels[stage])
+                self._setup['steps'].append(step)
+            def progress(text):
+                with self._lock:
+                    step['log'] = safe_text(text, 12000)
+            result = self._installer(command, cancel=self._shutdown, progress=progress)
+            with self._lock:
+                step.update(returncode=result.returncode, log=safe_text(result.output, 12000),
+                            timed_out=result.timed_out, cancelled=result.cancelled)
+            if result.returncode or result.timed_out or result.cancelled:
+                code = 'dependency_install_timeout' if result.timed_out else 'dependency_install_failed'
+                self._last_install = code
+                with self._lock:
+                    self._browser_health = failed_report({**environment_report(), 'stage': stage}, RuntimeError(result.output), code=code)
+                    self._setup.update(stage='failed', message=HEALTH_MESSAGES[code])
+                return
+        # Zero exit codes are not proof of a usable browser. Verify the real
+        # headed backend on the same owner thread before reporting installed.
+        report = self._check_browser()
+        self._last_install = 'installed' if report['ready'] else 'installed_not_ready'
 
     def diagnose(self, data):
         adapter = self.registry.get(data.get('platform'))
@@ -257,6 +319,10 @@ class GuidedService:
             def progress(code, seconds):
                 self._save(state, code, wait_seconds=seconds)
             self._backends[ident] = self.factory(self.registry.get(state['platform']), self.ledger, self._cancel, progress)
+            health = getattr(self._backends[ident], 'startup_report', None)
+            if health:
+                with self._lock:
+                    self._browser_health = dict(health)
         return self._backends[ident]
 
     def _gather(self, state, backend, adapter, *, navigate=False, more=False):
@@ -390,14 +456,10 @@ class GuidedService:
                 continue
             try:
                 if action == 'install':
-                    self._last_install = 'installing'
-                    for args in ([sys.executable,'-m','pip','install','playwright>=1.48,<2'],
-                                 [sys.executable,'-m','playwright','install','chromium']):
-                        result = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, timeout=360, shell=False)
-                        if result.returncode:
-                            raise CrawlError('dependency_install_failed')
-                    self._last_install = 'installed'
+                    self._install_browser()
+                    continue
+                if action == 'check_browser':
+                    self._check_browser()
                     continue
                 state = self._load(ident)
                 self._run(action,state,secret)
@@ -405,8 +467,13 @@ class GuidedService:
                     self._cancel.set()
             except Exception as exc:
                 code = exc.code if isinstance(exc,CrawlError) else 'operation_error'
-                if action == 'install':
-                    self._last_install = 'dependency_install_failed'
+                if action in {'install', 'check_browser'}:
+                    code = 'dependency_install_failed' if action == 'install' else 'browser_check_failed'
+                    if action == 'install':
+                        self._last_install = code
+                    with self._lock:
+                        self._browser_health = failed_report(environment_report(), exc, code=code)
+                        self._setup.update(stage='failed', message=self._browser_health['message'])
                 else:
                     try:
                         current = self._load(ident)
@@ -416,6 +483,9 @@ class GuidedService:
                             if backend: backend.close()
                             self._save(state,'stopped',status='stopped')
                         else:
+                            if isinstance(exc, BrowserStartupError):
+                                self._browser_health = exc.report
+                                state['startup_diagnostic'] = exc.report
                             self._save(state,code,status='paused' if code=='paused' else 'waiting_manual')
                     except Exception:
                         pass
