@@ -15,6 +15,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from .workspace import InputError, Workspace
 from .collection import Collector
+from .collection_guidance import CollectionGuidance
 from .evidence_ui import Conflict, EvidenceService
 
 MAX_BODY = 2_000_000
@@ -27,6 +28,7 @@ class LocalServer(ThreadingHTTPServer):
     def __init__(self, workspace: Workspace, port: int = 0):
         self.workspace = workspace
         self.collector = Collector(workspace)
+        self.guidance = CollectionGuidance(workspace)
         self.evidence = EvidenceService(workspace)
         self.token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()
@@ -87,12 +89,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/", "/app.js", "/advanced", "/advanced.js"}
+        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js"}[path]
+                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
             elif path == "/api/evidence/export":
@@ -157,8 +159,8 @@ class Handler(BaseHTTPRequestHandler):
             target = self.server.evidence
             methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "review", "upload", "metric", "save", "remove", "generate")}
         elif route.startswith("/api/collection/"):
-            target = self.server.collector
-            methods = {"/api/collection/" + name: name for name in ("start", "step", "status", "list", "register")}
+            target = self.server.guidance if route == "/api/collection/preview" else self.server.collector
+            methods = {"/api/collection/" + name: name for name in ("start", "step", "status", "list", "register", "preview")}
         if route not in methods:
             self._json(404, {"error": "入口不存在。"})
             return

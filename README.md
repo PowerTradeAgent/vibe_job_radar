@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+**已打开高级页但不知道怎么填？先看 [URL 与搜索 API 逐格填写案例](docs/COLLECTION_FORM_CASES.md)，新版页面也提供就地提示和不采集预检。**
+
 将获准处理的招聘文本变成逐条要求，再与自己的项目、附件和量化指标关联，生成描述、覆盖矩阵与缺口清单。
 
 **先看这里：下载完整 main 源码并解压，双击 [START_HERE.html](START_HERE.html) 阅读浏览器版入门指南；完整步骤见 [零基础操作指南](docs/FIRST_RUN.md)。无需学习 Git、JSON、Docker 或数据库。仍需安装 Python，并非免安装 EXE。**
