@@ -10,10 +10,17 @@ async function api(path, data={}) {
   if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
   return result;
 }
+function updateButtons() {
+  const locked=busy||collecting;
+  document.querySelectorAll("button").forEach(b=>{b.disabled=locked;});
+  $("collect-pause").disabled=!collecting;
+  $("prev-page").disabled=locked||page===0;
+  $("next-page").disabled=locked||(page+1)*50>=total;
+}
 async function act(fn) {
   if (busy || collecting) { note("已有操作执行中，请先暂停连续采集或完成当前操作。"); return; }
-  busy = true;
-  try { await fn(); } catch(error) { note(error.message || "操作失败"); } finally { busy=false; }
+  busy = true; updateButtons();
+  try { await fn(); } catch(error) { note(error.message || "操作失败"); } finally { busy=false; updateButtons(); }
 }
 function options(select, values, value="") {
   select.replaceChildren();
@@ -27,7 +34,7 @@ function checks(id, values, checked=[]) {
 const chosen=id=>[...$(id).querySelectorAll("input:checked")].map(i=>i.value);
 function setChecks(id, values) { for(const i of $(id).querySelectorAll("input"))i.checked=values.includes(i.value); }
 function text(tag, value) { const e=document.createElement(tag); e.textContent=value;return e; }
-function button(label, fn) {const b=text("button",label); b.type="button";b.addEventListener("click",()=>act(fn));return b;}
+function button(label, fn) {const b=text("button",label); b.type="button";b.disabled=busy||collecting;b.addEventListener("click",()=>act(fn));return b;}
 function table(id, headers, rows) {
   const t=document.createElement("table"),head=document.createElement("tr");headers.forEach(h=>head.append(text("th",h)));t.append(head);
   rows.forEach(row=>{const tr=document.createElement("tr");row.forEach(v=>tr.append(text("td",String(v??""))));t.append(tr);});$(id).replaceChildren(t);
@@ -73,7 +80,7 @@ async function loadRequirements(reset=false) {
     const details=document.createElement("details");details.append(text("summary","完整职位原文与引用位置"));const pre=document.createElement("pre");const characters=Array.from(row.source_text);pre.append(document.createTextNode(characters.slice(0,row.start).join("")),text("mark",row.quote),document.createTextNode(characters.slice(row.end).join("")));details.append(pre,text("p",row.url));card.append(details);
     card.append(button("复核此条",async()=>{const f=$("review-form");f.elements.requirement_id.value=row.requirement_id;f.elements.decision.value=row.saved_review?.decision||"approve";f.elements.reviewer.value=row.saved_review?.reviewer||"";f.elements.reason.value=row.saved_review?.reason||"";$("review-source").textContent=row.source_text;$("review-panel").open=true;$("review-panel").scrollIntoView({block:"center"});}));$("requirement-list").append(card);}
   $("pagination").textContent=`第 ${page+1} 页 / ${Math.max(1,Math.ceil(total/50))} 页，共 ${total} 条`;
-  $("prev-page").disabled=page===0;$("next-page").disabled=(page+1)*50>=total;mappingCount();
+  updateButtons();mappingCount();
 }
 function metricData(){const f=$("metric-form").elements,d={metric_id:f.metric_id.value,current:Number(f.current.value),sample_size:Number(f.sample_size.value),window:f.window.value,comparison_basis:f.comparison_basis.value};
   if(!f.current.value||!f.sample_size.value)throw new Error("请填写当前值和样本量（0 必须明确填写）。");
@@ -100,12 +107,12 @@ $("generate").onclick=()=>act(async()=>{const result=await api("/api/evidence/ge
 $("export-evidence").onclick=()=>act(()=>download("/api/evidence/export","personal-evidence.zip"));
 async function refreshCollections(){const result=await api("/api/collection/list");options($("collect-history"),Object.fromEntries(result.runs.map(s=>[s.id,`${s.updated_at} · ${s.mode} · ${s.status} · ${s.id.slice(0,8)}`])),activeCollection);}
 function showCollection(s){activeCollection=s.id;$("collect-progress").textContent=`任务 ${s.id.slice(0,8)} · ${s.status} · 阶段 ${s.phase} · 搜索 ${s.search_requests}/${s.search_budget} · 正文尝试 ${s.detail_attempts}/${s.detail_budget} · 数据源页 ${s.feed_requests}/${s.feed_budget}`;table("collect-summary",["平台","搜索请求","正文状态","平台接入认证"],Object.entries(s.platform_summary).map(([k,v])=>[k,v.queries_attempted,JSON.stringify(v.detail_outcomes),"未认证；仅显示本次观测"]));$("collect-json").textContent=JSON.stringify(s,null,2);$("collect-result").replaceChildren();if(s.report_id){$("collect-result").append(button("下载采集审计",()=>download(`/api/download/${s.report_id}/collection_manifest.json`,"collection_manifest.json")),button("下载逐条要求",()=>download(`/api/download/${s.report_id}/requirements_zh.csv`,"requirements_zh.csv")));}}
-async function continueCollection(){if(busy||collecting)return;collecting=true;looping=true;$("collect-pause").disabled=false;$("collect-start").disabled=true;try{while(looping){const s=await api("/api/collection/step",{id:activeCollection,api_key:$("collect-form").elements.api_key.value});showCollection(s);if(["completed","needs_attention","empty"].includes(s.status)){looping=false;$("collect-form").elements.api_key.value="";note(`采集结束：${s.status}。请核对各平台失败和预算跳过项。`);await refreshProfile();break;}await new Promise(resolve=>setTimeout(resolve,30));}}catch(error){note(error.message);looping=false;}finally{looping=false;collecting=false;$("collect-pause").disabled=true;$("collect-start").disabled=false;await refreshCollections();}}
+async function continueCollection(){if(busy||collecting)return;collecting=true;looping=true;updateButtons();try{while(looping){const s=await api("/api/collection/step",{id:activeCollection,api_key:$("collect-form").elements.api_key.value});showCollection(s);if(["completed","needs_attention","empty"].includes(s.status)){looping=false;$("collect-form").elements.api_key.value="";note(`采集结束：${s.status}。请核对各平台失败和预算跳过项。`);await refreshProfile();break;}await new Promise(resolve=>setTimeout(resolve,30));}}catch(error){note(error.message);looping=false;}finally{looping=false;try{await refreshCollections();}catch(error){note(error.message);}finally{collecting=false;updateButtons();}}}
 $("collect-form").onsubmit=async event=>{event.preventDefault();if(collecting||busy)return;let created=false;await act(async()=>{const f=event.target.elements,d=Object.fromEntries(new FormData(event.target));delete d.api_key;Object.assign(d,{roles:chosen("collect-roles"),platforms:chosen("collect-platforms"),permit_platforms:chosen("collect-permits"),consent:f.consent.checked,search_storage_rights:f.search_storage_rights.checked});for(const k of ["search_budget","detail_budget","feed_budget","fresh_hours","pages"])d[k]=Number(d[k]);showCollection(await api("/api/collection/start",d));await refreshCollections();created=true;});if(created)await continueCollection();};
 $("collect-pause").onclick=()=>{looping=false;note("已请求暂停；当前请求结束后不再发出下一次请求。任务进度已保留。");};
 $("collect-resume").onclick=async()=>{if(collecting||busy)return;activeCollection=$("collect-history").value||activeCollection;if(!activeCollection){note("请先创建或选择一个任务。");return;}await continueCollection();};
 $("collect-load").onclick=()=>act(async()=>showCollection(await api("/api/collection/status",{id:$("collect-history").value})));
 $("collect-refresh").onclick=()=>act(refreshCollections);
 $("platform-form").onsubmit=event=>{event.preventDefault();act(async()=>{const result=await api("/api/collection/register",Object.fromEntries(new FormData(event.target)));await init();note(result.message);});};
-async function init(){if(!token)throw new Error("请先从启动器地址打开基础工作台，再进入本页面。");const response=await fetch("/api/status",{headers:{"X-Radar-Token":token},cache:"no-store"});const s=await response.json();if(!response.ok)throw new Error(s.error);const platforms=Object.fromEntries(Object.entries(s.platforms).map(([k,v])=>[k,`${v.label} (${v.domains.join(",")})`]));checks("collect-platforms",platforms,Object.keys(platforms));checks("collect-roles",s.roles,Object.keys(s.roles));checks("collect-permits",platforms,[]);await refreshProfile();await refreshCollections();mappingCount();}
+async function init(){if(!token)throw new Error("请先从启动器地址打开基础工作台，再进入本页面。");const response=await fetch("/api/status",{headers:{"X-Radar-Token":token},cache:"no-store"});const s=await response.json();if(!response.ok)throw new Error(s.error);const platforms=Object.fromEntries(Object.entries(s.platforms).map(([k,v])=>[k,`${v.label} (${v.domains.join(",")})`]));checks("collect-platforms",platforms,Object.keys(platforms));checks("collect-roles",s.roles,Object.keys(s.roles));checks("collect-permits",platforms,[]);await refreshProfile();await refreshCollections();mappingCount();updateButtons();}
 init().catch(error=>note(error.message));
