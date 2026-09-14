@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const token = sessionStorage.getItem("radar-session") || "";
 let profile = null, page = 0, total = 0, runId = "", activeCollection = "", looping = false, collecting = false;
-let selected = new Map(), metrics = [], busy = false;
+let selected = new Map(), metrics = [], busy = false, snapshotCapabilities = {};
 const note = text => { $("notice").textContent = text; };
 async function api(path, data={}) {
   const response = await fetch(path, {method:"POST", cache:"no-store", headers:{"Content-Type":"application/json","X-Radar-Token":token}, body:JSON.stringify(data)});
@@ -72,11 +72,13 @@ async function loadRequirements(reset=false) {
   if(reset||nextRun!==runId){page=0;selected=new Map();}
   runId=nextRun;
   const result=await api("/api/evidence/catalogue",{run_id:runId,query:$("requirement-query").value,page});total=result.total;
+  snapshotCapabilities=result.capabilities;
+  checks("capabilities",snapshotCapabilities,chosen("capabilities"));
   // Do not silently refresh the optimistic revision while the user is editing.
   $("requirement-list").replaceChildren();
   for(const row of result.rows){const card=document.createElement("div");card.className="card";const label=document.createElement("label"),check=document.createElement("input");check.type="checkbox";check.checked=selected.has(row.requirement_id);check.setAttribute("data-rid",row.requirement_id);
     check.addEventListener("change",()=>{if(check.checked){selected.set(row.requirement_id,row.capability);const cap=[...$("capabilities").querySelectorAll("input")].find(i=>i.value===row.capability);if(cap)cap.checked=true;}else selected.delete(row.requirement_id);mappingCount();});
-    label.append(check,`${row.title} · ${profile.capabilities[row.capability]||row.capability} · ${row.strength} · ${row.evidence_level}`);card.append(label,text("p",row.quote));card.append(text("small",`${row.requirement_id} · ${row.relation} · 复核 ${row.saved_review?.decision||row.review_status}`));
+    label.append(check,`${row.title} · ${snapshotCapabilities[row.capability]||row.capability} · ${row.strength} · ${row.evidence_level}`);card.append(label,text("p",row.quote));card.append(text("small",`${row.requirement_id} · ${row.relation} · 复核 ${row.saved_review?.decision||row.review_status}`));
     const details=document.createElement("details");details.append(text("summary","完整职位原文与引用位置"));const pre=document.createElement("pre");const characters=Array.from(row.source_text);pre.append(document.createTextNode(characters.slice(0,row.start).join("")),text("mark",row.quote),document.createTextNode(characters.slice(row.end).join("")));details.append(pre,text("p",row.url));card.append(details);
     card.append(button("复核此条",async()=>{const f=$("review-form");f.elements.requirement_id.value=row.requirement_id;f.elements.decision.value=row.saved_review?.decision||"approve";f.elements.reviewer.value=row.saved_review?.reviewer||"";f.elements.reason.value=row.saved_review?.reason||"";$("review-source").textContent=row.source_text;$("review-panel").open=true;$("review-panel").scrollIntoView({block:"center"});}));$("requirement-list").append(card);}
   $("pagination").textContent=`第 ${page+1} 页 / ${Math.max(1,Math.ceil(total/50))} 页，共 ${total} 条`;
@@ -90,7 +92,7 @@ function renderMetrics(){ $("metric-list").replaceChildren();metrics.forEach((m,
 async function editEvidence(e){
   const f=$("evidence-form").elements;for(const key of ["evidence_id","project","contribution","scope","review_status","artifact_id","external_url","reviewer"])f[key].value=e[key]||"";f.name.value=profile.name;f.attested.checked=false;
   if(![...$("source-run").options].some(o=>o.value===e.source_run_id)){$("source-run").append(new Option(e.source_run_id,e.source_run_id));}
-  $("source-run").value=e.source_run_id;runId=e.source_run_id;page=0;selected=new Map(e.requirement_ids.map(rid=>[rid,""]));metrics=structuredClone(e.metrics);setChecks("capabilities",e.capabilities);renderMetrics();await loadRequirements(false);note("正在编辑已有证据；修改后需重新确认真实性。");}
+  $("source-run").value=e.source_run_id;runId=e.source_run_id;page=0;selected=new Map(e.requirement_ids.map(rid=>[rid,""]));metrics=structuredClone(e.metrics);setChecks("capabilities",e.capabilities);renderMetrics();await loadRequirements(false);setChecks("capabilities",e.capabilities);note("正在编辑已有证据；修改后需重新确认真实性。");}
 $("load-requirements").onclick=()=>act(()=>loadRequirements(true));
 $("reload-state").onclick=()=>act(async()=>{await refreshProfile();note("已读取最新版本；请核对未保存的编辑再提交。");});
 $("prev-page").onclick=()=>act(async()=>{if(page>0){page--;await loadRequirements();}});
