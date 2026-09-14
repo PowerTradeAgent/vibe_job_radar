@@ -14,6 +14,7 @@ from ..html_parser import Document, ParseError, parse_job_html, plain_text
 from ..url_safety import credential_query_key
 from ..utils import domain_matches
 from .contracts import Card, CrawlError, PageSnapshot, SiteAdapter
+from .selectors import select_nodes
 
 
 @dataclass(frozen=True)
@@ -60,14 +61,12 @@ class DOMAdapter:
             raise CrawlError('invalid_url') from exc
         if not any(domain_matches(p.hostname, d) for d in self.domains):
             raise CrawlError('wrong_platform')
-        # Liepin uses `key` as the search term, not an authentication secret.
         permitted_key = (not detail and p.path.rstrip('/') == urlsplit(self.search_base).path.rstrip('/'))
         if any(credential_query_key(k) and not (permitted_key and k == self.keyword_param)
                for k, _ in parse_qsl(p.query, keep_blank_values=True)):
             raise CrawlError('credential_url')
         if detail and not re.search(self.detail_pattern, p.path):
             raise CrawlError('not_job_url')
-        # Preserve identity-bearing query parameters; strip fragments and trackers only.
         query = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
                  if not k.casefold().startswith('utm_')]
         return urlunsplit((p.scheme, p.netloc.lower(), p.path or '/', urlencode(query), ''))
@@ -75,7 +74,7 @@ class DOMAdapter:
     def cards(self, page: PageSnapshot) -> list[Card]:
         self.accept_url(page.url)
         out = {}
-        for node in Document(page.html).root.walk():
+        for node in select_nodes(Document(page.html).root, self.card_selector):
             if node.tag != 'a' or not node.attrs.get('href'):
                 continue
             try:
@@ -90,7 +89,6 @@ class DOMAdapter:
         return list(out.values())[:300]
 
     def challenged(self, text: str, url: str) -> bool:
-        # Inspect visible text, NOT script source containing an unused captcha library.
         return bool(re.search(r'请完成.{0,12}验证|滑动.{0,8}验证|安全验证|访问异常|访问过于频繁|'
                               r'登录后.{0,8}(?:查看|浏览)|verify you are human|access denied', text, re.I)
                     or re.search(r'/(?:captcha|intercept|challenge)(?:/|\?)', url, re.I))
@@ -100,7 +98,6 @@ class DOMAdapter:
         if self.challenged(plain_text(page.html), page.url):
             raise CrawlError('manual_required')
         try:
-            # The existing evidence-preserving parser is kept authoritative.
             markup = re.sub(r'<script\b[^>]*>.*?</script\s*>',
                 lambda m: m.group(0) if 'application/ld+json' in m.group(0).split('>', 1)[0].lower() else '',
                 page.html, flags=re.I | re.S)

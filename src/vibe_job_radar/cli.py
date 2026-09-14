@@ -7,6 +7,7 @@ import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from ._version import __version__
 from .config import load_config, platform_for_url
 from .discovery import build_plan, discover
 from .html_parser import parse_job_html
@@ -25,7 +26,7 @@ def comma_list(value):
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="vibe-radar", description="Evidence-first recruiting requirements → measurable profile templates")
-    p.add_argument("--version", action="version", version="vibe-job-radar 0.1.0")
+    p.add_argument("--version", action="version", version=f"vibe-job-radar {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
     def base(name, help):
         s = sub.add_parser(name, help=help)

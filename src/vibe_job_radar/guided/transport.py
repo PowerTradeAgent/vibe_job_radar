@@ -66,7 +66,7 @@ class PinnedTransport:
                     break
         raise CrawlError('paused')
 
-    def fetch(self, url: str, method='GET', headers=None, body=None) -> WireResponse:
+    def fetch(self, url: str, method='GET', headers=None, body=None, *, required=True) -> WireResponse:
         try:
             host, ip, target = validate_public_url(url, self.domains)
         except FetchError as exc:
@@ -77,7 +77,6 @@ class PinnedTransport:
         if body and len(body) > 1_000_000:
             raise CrawlError('request_too_large')
         conn = PinnedHTTPSConnection(host, ip, 20)
-        # Cookies are supplied by the browser cookie jar. Never persisted or logged.
         hdr = {k: v for k, v in (headers or {}).items()
                if k.lower() not in {'host', 'connection', 'content-length', 'accept-encoding',
                                     'proxy-authorization', 'proxy-connection', 'transfer-encoding'}}
@@ -89,8 +88,9 @@ class PinnedTransport:
             pairs = response.getheaders()
             metadata = {k.lower(): v for k, v in pairs if k.lower() != 'set-cookie'}
             if response.status in {401, 403, 429}:
-                self.blocked.add(host)
-                self.ledger.cool(self.adapter.key, self._retry_seconds(metadata.get('retry-after', '')))
+                if required or response.status == 429:
+                    self.blocked.add(host)
+                    self.ledger.cool(self.adapter.key, self._retry_seconds(metadata.get('retry-after', '')))
                 raise CrawlError(f'http_{response.status}')
             content = response.read(5_000_001)
             if len(content) > 5_000_000:
@@ -130,13 +130,11 @@ class PinnedTransport:
         parser = self.robots[origin]
         if not parser.can_fetch(USER_AGENT, url):
             raise CrawlError('robots_denied')
-        # Our hard default is already conservative; stricter publisher delays win.
         delay = parser.crawl_delay(USER_AGENT) or 0
         rate = parser.request_rate(USER_AGENT)
         if rate and rate.requests:
             delay = max(delay, rate.seconds / rate.requests)
         if delay > self.ledger.limits.page_interval:
-            # Fail closed rather than silently ignoring a stricter policy.
             raise CrawlError('publisher_delay_exceeds_policy')
 
     def allowed_resource(self, url: str) -> bool:

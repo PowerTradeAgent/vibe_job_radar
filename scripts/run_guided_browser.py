@@ -41,16 +41,15 @@ class FixtureWire:
         if self.cancelled.is_set():raise CrawlError('paused')
         self.ledger.reserve('fixture',kind)
     def allowed_resource(self,url):return url.startswith('https://jobs.fixture.test/')
-    def ensure_robots(self,url):pass  # PinnedTransport robots tested separately.
-    def fetch(self,url,method='GET',headers=None,body=None):
+    def ensure_robots(self,url):pass
+    def fetch(self,url,method='GET',headers=None,body=None,*,required=True):
         self.reserve('request')
-        p=urlsplit(url);CALLS.append((method,p.path)) # never log query, body or cookie
+        p=urlsplit(url);CALLS.append((method,p.path))
         cookie=(headers or {}).get('cookie','')
         logged='fixture_login=yes' in cookie
         response_headers={'content-type':'text/html; charset=utf-8'}
         if p.path=='/robots.txt':return WireResponse(200,{'content-type':'text/plain'},b'User-agent: *\nAllow: /')
         if p.path=='/login' and method=='POST':
-            pass  # Artificial native login button; no real credentials.
             return WireResponse(302,{'location':'/search'},b'',('fixture_login=yes; Path=/; Secure; HttpOnly',))
         if p.path=='/login':
             text='''<!doctype html><h1>人工测试登录页</h1><form action="/login" method="post">
@@ -63,8 +62,7 @@ class FixtureWire:
             links='<a href="/job/3">时间序列算法工程师 3</a>' if second else (
                 '<a href="/job/1">时间序列算法工程师 1</a><a href="/job/2">时间序列算法工程师 2</a>'
                 '<a rel="next" href="/search?page=2">下一页</a>')
-            # Requires JS rendering, not a static HTTP-only substitute.
-            text='<h1>人工测试岗位列表</h1><div id="jobs"></div><script>setTimeout(()=>{document.getElementById("jobs").innerHTML='+json.dumps(links)+'},150)</script>'
+            text='<h1>人工测试岗位列表</h1><div id="jobs"></div><script>setTimeout(()=>{document.getElementById("jobs").innerHTML='+json.dumps(links)+'},150); setInterval(()=>fetch("/poll").catch(()=>{}),250)</script>'
         elif p.path=='/job/1':
             return WireResponse(302,{'location':'/job/1-final'},b'')
         elif p.path.startswith('/job/'):
@@ -131,6 +129,11 @@ def main():
                 page.locator('#capture').click()
                 expect(page.locator('#cards .card')).to_have_count(3,timeout=30000)
                 result['checks'].append('authenticated JS-rendered list and next page become three deduplicated cards')
+                page.wait_for_timeout(500)
+                requests_after_ready = len(CALLS)
+                page.wait_for_timeout(900)
+                assert len(CALLS) == requests_after_ready
+                result['checks'].append('ready list freezes background polling until an explicit next action')
                 page.locator('#select-all').click();page.locator('#collect').click()
                 expect(page.locator('#task-status')).to_contain_text('本批次已结束',timeout=60000)
                 expect(page.locator('#result')).to_contain_text('已保存 3 个岗位')

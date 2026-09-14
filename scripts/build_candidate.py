@@ -11,7 +11,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 
 def build(out: Path) -> Path:
-    version=re.search(r'^version = "([^"]+)"', (ROOT/'pyproject.toml').read_text(), re.M).group(1)
+    version=re.search(r'^__version__ = "([^"]+)"', (ROOT/'src/vibe_job_radar/_version.py').read_text(encoding='utf-8'), re.M).group(1)
     out.mkdir(parents=True,exist_ok=True)
     archive=out/f'vibe-job-radar-{version}-source.zip'
     tops={'README.md','README_CLI.md','START_HERE.html','LICENSE','pyproject.toml','start_windows.bat','start_macos.command','.gitattributes','.gitignore','.env.example'}

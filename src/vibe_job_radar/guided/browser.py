@@ -22,6 +22,7 @@ class PlaywrightBackend:
         self.auth_mode = False
         self.redirects = 0
         self.resource_denials = set()
+        self._pagination_page = None
         try:
             from playwright.sync_api import sync_playwright
             self.runtime = sync_playwright().start()
@@ -74,7 +75,8 @@ class PlaywrightBackend:
         request = route.request
         try:
             if self.cancelled.is_set():
-                raise CrawlError('paused')
+                route.abort('blockedbyclient')
+                return  # Idle polling must not poison the next explicit action.
             url, kind, method = request.url, request.resource_type, request.method
             p = urlsplit(url)
             if not self.wire.allowed_resource(url):
@@ -87,12 +89,13 @@ class PlaywrightBackend:
                 raise CrawlError('write_not_allowed')
             if kind == 'document':
                 self.adapter.accept_url(url) if not self.auth_mode else self._auth_navigation(url)
-                self.wire.reserve('page')
+                self._reserve_document_page(request)
                 if not self.auth_mode:
                     self.wire.ensure_robots(url)
             # Reject credentials crossing a redirect: browser redirects are replaced
             # by a new, checked navigation; XHR redirects fail closed.
-            result = self.wire.fetch(url, method, request.all_headers(), request.post_data_buffer)
+            result = self.wire.fetch(url, method, request.all_headers(), request.post_data_buffer,
+                                     required=kind in {'document', 'xhr', 'fetch'})
             self._cookies(url, result.cookies)
             if 300 <= result.status < 400:
                 destination = urljoin(url, result.headers.get('location', ''))
@@ -113,6 +116,11 @@ class PlaywrightBackend:
                 'set-cookie', 'alt-svc', 'report-to', 'nel'}}
             route.fulfill(status=result.status, headers=filtered, body=result.body)
         except CrawlError as exc:
+            if (request.resource_type not in {'document', 'xhr', 'fetch'}
+                    and exc.code in {'http_401', 'http_403'}):
+                self.resource_denials.add('optional_' + exc.code)
+                route.abort('blockedbyclient')
+                return
             if (request.resource_type == 'document' or exc.code not in {
                     'resource_domain_blocked', 'write_not_allowed', 'method_blocked'}):
                 self.error = exc.code
@@ -126,6 +134,13 @@ class PlaywrightBackend:
                 route.abort('failed')
             except Exception:
                 pass
+
+    def _reserve_document_page(self, request):
+        prepaid = self._pagination_page
+        if prepaid is not None and request.frame == prepaid.main_frame:
+            self._pagination_page = None
+            return
+        self.wire.reserve('page')
 
     def _auth_navigation(self, url):
         p = urlsplit(url)
@@ -187,9 +202,15 @@ class PlaywrightBackend:
         if not button or button.get_attribute('aria-disabled') == 'true' or 'disabled' in (button.get_attribute('class') or '').split():
             return False
         self.wire.ensure_robots(self.page.url)
-        self.wire.reserve('page')  # SPA pagination may not create a navigation request.
-        button.click(); self._settle()
-        return True
+        self.wire.reserve('page')  # Reserve once, before either a document or SPA action.
+        self._pagination_page = self.page
+        try:
+            button.click(timeout=90000)
+            self._settle()
+            return True
+        finally:
+            # Never leak a SPA/no-navigation credit to an unrelated later visit.
+            self._pagination_page = None
 
     def collection_mode(self):
         self.auth_mode, self.error = False, None

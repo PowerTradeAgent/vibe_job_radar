@@ -5,6 +5,7 @@ restarts; live sessions/passwords do not. Dependency injection enables offline t
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib.metadata
 import json
@@ -27,10 +28,11 @@ from ..workspace import InputError, text_field
 from .adapters import Registry, builtins
 from .browser import PlaywrightBackend
 from .contracts import CrawlError
-from .rate import RateLedger
+from .rate import RateLedger, RateLimit
 from .transport import diagnose_host
 
 MESSAGES = {
+    'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
     'list_page_limit': '本任务列表页数已达到上限。新任务仍受站点共享配额限制。',
     'operation_error': '操作未完成，已有结果保留。请检查环境与页面。',
     'new': '任务已保存。正在准备采集浏览器。',
@@ -94,7 +96,6 @@ class GuidedService:
         self._backends = {}
         self._thread = None
         self._last_install = 'not_started'
-        # No mutation of historical files on construction; interrupted displayed on read.
 
     def _path(self, ident):
         if not isinstance(ident, str) or not re.fullmatch(r'[a-f0-9]{32}', ident):
@@ -207,7 +208,6 @@ class GuidedService:
                 if action == 'stop' and self._busy:
                     self._stop_ident = ident
                 elif self._busy:
-                    # Do not rewrite the worker's evolving state from a stale UI snapshot.
                     return {'id': ident, 'message': MESSAGES['paused']}
                 else:
                     self._submit('close' if action == 'stop' else 'pause_idle', ident)
@@ -239,7 +239,6 @@ class GuidedService:
 
     def diagnose(self, data):
         adapter = self.registry.get(data.get('platform'))
-        # This endpoint intentionally only performs DNS, never scans caller URLs.
         return diagnose_host(urlsplit(adapter.search_url('test')).hostname)
 
     def export(self, data):
@@ -253,7 +252,6 @@ class GuidedService:
         if previous and hasattr(previous, 'alive') and not previous.alive():
             self._backends.pop(ident).close()
         if ident not in self._backends:
-            # One actual browser session at a time prevents uncontrolled parallelism.
             for old in list(self._backends):
                 self._backends.pop(old).close()
             def progress(code, seconds):
@@ -277,7 +275,6 @@ class GuidedService:
             if self._cancel.is_set():
                 raise CrawlError('paused')
             page = backend.snapshot()
-            # A manually opened list is held to the same robots policy before capture.
             if hasattr(backend, 'wire'):
                 backend.wire.ensure_robots(page.url)
             cards = adapter.cards(page)
@@ -300,30 +297,38 @@ class GuidedService:
     def _collect(self, state, backend, adapter):
         self._save(state, 'collecting', status='running', phase='collect')
         selected = set(state['selection'])
-        for row in state['cards']:
-            if row['id'] not in selected or row['status'] == 'ok':
-                continue
-            if self._cancel.is_set():
-                raise CrawlError('paused')
-            row['status'] = 'opening'
-            self._save(state)
-            try:
-                page = backend.open(row['url'])
-                final_url = adapter.accept_url(page.url, detail=True)
-                parsed = adapter.detail(page)
-                record = JobRecord(**parsed, url=final_url, platform=adapter.key,
-                    source_mode='browser_fetch', rights_note=state['rights_note'],
-                    source_ref=f"guided:{state['id']}:{row['id']}",
-                    raw_sha256=hashlib.sha256(page.html.encode()).hexdigest())
-                with writer_lock(self.workspace.root), Store(self.workspace.db) as store:
-                    store.add(record)
-                row.update(status='ok', record_id=record.record_id, resolved_url=final_url, title=record.title)
-            except CrawlError as exc:
-                row['status'] = exc.code
+        try:
+            for row in state['cards']:
+                if row['id'] not in selected or row['status'] == 'ok':
+                    continue
+                if self._cancel.is_set():
+                    raise CrawlError('paused')
+                row['status'] = 'opening'
                 self._save(state)
-                if exc.code not in {'structure_changed','not_job_url'}:
-                    raise
-            self._save(state)
+                try:
+                    page = backend.open(row['url'])
+                    final_url = adapter.accept_url(page.url, detail=True)
+                    parsed = adapter.detail(page)
+                    record = JobRecord(**parsed, url=final_url, platform=adapter.key,
+                        source_mode='browser_fetch', rights_note=state['rights_note'],
+                        source_ref=f"guided:{state['id']}:{row['id']}",
+                        raw_sha256=hashlib.sha256(page.html.encode()).hexdigest())
+                    with writer_lock(self.workspace.root), Store(self.workspace.db) as store:
+                        store.add(record)
+                    row.update(status='ok', record_id=record.record_id, resolved_url=final_url, title=record.title)
+                except CrawlError as exc:
+                    row['status'] = exc.code
+                    self._save(state)
+                    if exc.code not in {'structure_changed','not_job_url'}:
+                        raise
+                self._save(state)
+        finally:
+            # Keep a usable batch report even if a later selected job blocks.
+            self._finalize_report(state, adapter)
+        self._save(state, 'completed', status='completed', phase='report')
+
+    def _finalize_report(self, state, adapter):
+        selected = set(state['selection'])
         if any(c['status']=='ok' and c['id'] in selected for c in state['cards']):
             from ..pipeline import analyze
             with writer_lock(self.workspace.root):
@@ -336,11 +341,15 @@ class GuidedService:
                     with Store(batch_db) as batch:
                         for record in records:
                             batch.add(record)
+                    # A plugin need not edit the global platform catalogue. Preserve
+                    # its metadata in this report's own effective configuration.
+                    config = copy.deepcopy(self.workspace.config)
+                    config['platforms'].setdefault(adapter.key,
+                        {'label': adapter.label, 'domains': list(adapter.domains)})
                     analyze(batch_db, self.workspace.root/'reports'/report_id,
-                            config=self.workspace.config, role_filter=state['roles'], platform_filter=[adapter.key])
-            state['report_id'] = report_id
-        self._save(state, 'completed', status='completed', phase='report',
-                   report_scope='exact successful selected records in this batch')
+                            config=config, role_filter=state['roles'], platform_filter=[adapter.key])
+            self._save(state, report_id=report_id,
+                       report_scope='exact successful selected records in this batch')
 
     def _run(self, action, state, secret):
         if action == 'close':
@@ -350,7 +359,14 @@ class GuidedService:
         if action == 'pause_idle':
             self._cancel.set()
             self._save(state,'paused',status='paused'); return
-        backend, adapter = self._backend(state), self.registry.get(state['platform'])
+        adapter = self.registry.get(state['platform'])
+        if action == 'login':
+            try:
+                self.ledger.reserve(adapter.key, 'login')
+            except RateLimit as exc:
+                self._save(state, wait_seconds=round(exc.wait, 1))
+                raise CrawlError('login_rate_limited') from exc
+        backend = self._backend(state)
         self._save(state, 'opening', status='running')
         if action == 'login':
             backend.open(adapter.login_url, authentication=True)
@@ -385,8 +401,8 @@ class GuidedService:
                     continue
                 state = self._load(ident)
                 self._run(action,state,secret)
-                if state['status'] in {'completed','stopped','paused'}:
-                    self._cancel.set()  # stop idle scripts from generating more supplier requests
+                if state['status'] in {'completed','stopped','paused','ready'}:
+                    self._cancel.set()
             except Exception as exc:
                 code = exc.code if isinstance(exc,CrawlError) else 'operation_error'
                 if action == 'install':
