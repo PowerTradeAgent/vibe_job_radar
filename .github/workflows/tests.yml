@@ -1,16 +1,43 @@
 name: offline-tests
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         python: ['3.10', '3.11', '3.12']
+        include:
+          - os: macos-latest
+            python: '3.12'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python scripts/run_tests.py
+      - run: python scripts/run_tests.py --report acceptance/results.json
       - run: python scripts/run_demo.py
+      - run: python scripts/start_workbench.py --doctor --workspace .ci-source-workspace
+      - name: Verify installed entrypoint and bundled UI
+        run: |
+          python -m pip install --no-deps .
+          vibe-radar-ui --doctor --workspace .ci-installed-workspace
+          python -c "from importlib.resources import files; p=files('vibe_job_radar'); assert p.joinpath('workbench.html').is_file(); assert p.joinpath('workbench.js').is_file()"
+      - name: Save test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-${{ matrix.os }}-${{ matrix.python }}
+          path: acceptance/
+      - name: Create source archive
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        run: git archive --format=zip --output=vibe-job-radar-source.zip HEAD
+      - name: Save source archive
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-checkout
+          path: vibe-job-radar-source.zip

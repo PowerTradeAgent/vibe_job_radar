@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Vibe Job Radar · 本地工作台</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#192b3f;background:#f3f6fa;line-height:1.65}*{box-sizing:border-box}body{margin:0}main{max-width:1100px;margin:auto;padding:26px 22px 70px}header{padding:12px 0 20px}h1{font-size:30px;margin:0}h2{font-size:21px;margin:0 0 14px}h3{font-size:17px;margin:16px 0 8px}.tag{font-size:13px;letter-spacing:.08em;color:#526780}.intro{max-width:850px;color:#485d75}section{background:white;border:1px solid #dce3ec;border-radius:12px;padding:22px;margin:18px 0}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px}.wide{grid-column:1/-1}label{display:block;font-weight:600}input,textarea,select{font:inherit;width:100%;padding:9px 11px;border:1px solid #aebdd0;border-radius:6px;background:white;color:#192b3f}textarea{resize:vertical}input[type=checkbox]{width:auto;margin-right:8px}label.check{font-weight:400;margin:8px 0}.choices{display:flex;flex-wrap:wrap;gap:4px 20px}.choices label{font-weight:400}button{font:inherit;cursor:pointer;padding:8px 15px;border:1px solid #265b94;border-radius:7px;background:#265b94;color:white;margin:5px 8px 5px 0}button.secondary{background:white;color:#265b94}button:disabled{opacity:.5;cursor:wait}small,.muted{color:#536a83}#notice{position:sticky;top:8px;z-index:2;white-space:pre-wrap;border:1px solid #b8cce0;background:#eef5ff;padding:12px 16px;border-radius:8px}#notice:empty{display:none}.warning{border-left:4px solid #d49538;background:#fff8e9;padding:10px 14px}.stats{font-size:18px;font-weight:600}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;text-align:left;font-size:14px}th,td{padding:10px;border-bottom:1px solid #e0e6ee;vertical-align:top;min-width:75px}td.quote{min-width:260px;white-space:pre-wrap}th{background:#f3f6fa}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f7f9fc;border:1px solid #dce3ec;padding:14px;border-radius:7px;max-height:440px;overflow:auto}details{margin:14px 0}summary{cursor:pointer;font-weight:600}a{color:#245e9d}#runs button{display:block;text-align:left}.files{display:flex;flex-wrap:wrap}.files button{font-size:13px}footer{color:#536a83;font-size:13px}@media(max-width:650px){.grid{grid-template-columns:1fr}main{padding:18px 12px}section{padding:16px}h1{font-size:25px}}
+</style>
+<script src="/app.js" defer></script>
+</head>
+<body><main>
+<header><div class="tag">EVIDENCE FIRST / LOCAL WORKSPACE</div><h1>招聘要求 → 逐条证据 → 可量化描述</h1>
+<p class="intro">先用演示熟悉输出，再粘贴你有权处理的真实职位文本。离线分析不需要 API Key，也不需要把招聘平台账号交给本项目。</p>
+<p class="warning">当前不是“全平台自动爬取器”。已配置域名 ≠ 已登录平台；摘要 ≠ 完整正文；要求并集 ≠ 本人完全满足。</p></header>
+<div id="notice" role="status" aria-live="polite"></div>
+<section><h2>1. 检查环境与数据</h2><p id="workspace" class="muted"></p><p id="counts" class="stats">正在读取本地数据…</p>
+<button id="doctor" type="button" class="secondary">环境自检（不联网）</button><button id="demo" type="button">运行合成演示</button><button id="refresh" type="button" class="secondary">刷新数据</button>
+<small>演示只写入独立 demo.sqlite，绝不混入真实数据库。</small>
+<details><summary>平台接入状态与账号说明</summary><div id="sources" class="scroll"></div>
+<p>若平台要求登录，请你在自己的浏览器/App 中登录并完成验证码；只将获准处理的职位文本带入本工作台。不要粘贴密码、验证码、Cookie、候选人简历或不必要的联系人信息。</p>
+<p id="key-status"></p></details></section>
+<section><h2>2. 添加真实招聘文本</h2>
+<form id="job-form"><div class="grid">
+<label>职位名称<input name="title" required maxlength="2000" placeholder="使用真实标题，例如：时间序列算法工程师"></label>
+<label>来源平台<select name="platform" id="job-platform"></select></label>
+<label>招聘公司<input name="company" maxlength="2000" placeholder="如未知请留空，不要编造"></label>
+<label>城市<input name="location" maxlength="2000"></label>
+<label class="wide">职位来源链接<input name="url" type="url" maxlength="2000" placeholder="https://… 不要包含登录 Token"></label>
+<label class="wide">来源说明（没有链接时必填）<input name="source_ref" maxlength="2000" placeholder="例如：App 内职位分享编号、本人获准处理的文件来源"></label>
+<label class="wide">原始岗位职责与任职要求<textarea name="text" rows="9" required maxlength="150000" placeholder="保留原始段落，优先粘贴完整 JD。不要只挑选与自己匹配的句子。"></textarea></label>
+<label>证据完整性<select name="evidence_level"><option value="full_text">完整职位正文</option><option value="snippet">摘要 / 仅部分内容</option></select></label>
+<label>来源与允许使用范围<input name="rights_note" required maxlength="2000" placeholder="填写实际来源、许可依据及用途"></label>
+</div><label class="check"><input name="full_text_confirmed" type="checkbox">标记为完整正文时，我已确认其完整性；我有权处理这些内容。</label>
+<button type="submit">保存到真实数据库</button><small>同一内容会去重保留快照，并记录观察。不会自动提交简历或联系招聘方。</small></form>
+<details><summary>已有 JSON / JSONL / CSV？批量导入</summary><form id="import-form">
+<p>UTF-8 编码，最大 1 MB / 1000 条。CSV 可用列名：职位名称、公司、平台、来源链接、城市、职位描述。平台值建议使用 boss、liepin、51job。全部校验通过后才入库。</p>
+<label>选择文件<input id="import-file" type="file" accept=".json,.jsonl,.csv" required></label>
+<label>来源与允许使用范围<input name="rights_note" required maxlength="2000"></label>
+<label class="check"><input name="full_text_confirmed" type="checkbox" required>有权处理该文件；其中标记为 full_text 的行确实包含完整 JD，且不混入合成演示。</label>
+<button type="submit" class="secondary">校验并导入文件</button></form></details>
+</section>
+<section><h2>3. 选择岗位与发现线索</h2><div id="roles" class="choices"></div>
+<p class="muted">岗位筛选依据标题/正文配置，不会因为勾选了岗位就修改原始招聘要求。平台选择仅用于搜索发现；分析按上述岗位筛选已导入数据。</p>
+<details><summary>可选：搜索计划与 Brave API 发现（不是平台自动登录）</summary>
+<div id="platforms" class="choices"></div><button id="plan" type="button" class="secondary">预览检索计划（零请求）</button><pre id="plan-output" hidden></pre>
+<form id="search-form"><div class="grid"><label>Brave Search API Key（可选）<input name="api_key" type="password" autocomplete="off" maxlength="1000" placeholder="仅本次请求使用；也可在启动前设环境变量"></label>
+<label>本次最多 API 请求数<input name="max_requests" type="number" min="1" max="20" value="3" required></label></div>
+<label class="check"><input name="consent_search" type="checkbox" required>同意把检索词发送给 Brave，并按自己的 API 套餐消耗请求额度。</label>
+<button type="submit">发现摘要线索</button><small>不会自动请求职位详情页。密钥不写入配置或浏览器持久存储。</small></form>
+<p>没有 Key 也能使用主流程：在招聘平台自行检索，在有权处理的范围内复制完整 JD 到上方表单。搜索失败时检查网络、密钥与额度，不要提供平台密码。</p></details>
+<details><summary>已导入的真实记录（最多展示最近 200 条）</summary><div id="records" class="scroll"></div></details>
+</section>
+<section><h2>4. 生成要求清单与描述</h2><button id="analyze" type="button">分析真实数据并生成报告</button>
+<p class="muted">本工作台默认仅本地规则分析，不调用大模型、不发送职位正文到外部模型服务。每次报告单独保存；没有本人证据的指标保持【待填】。</p>
+<div id="report" hidden><h3 id="report-title"></h3><p id="report-message" class="warning"></p><p id="report-stats"></p>
+<details open><summary>逐条要求预览（前 100 行；完整数据请下载 CSV）</summary><div id="requirements" class="scroll"></div></details>
+<details><summary>通用描述模板预览</summary><pre id="descriptions"></pre></details>
+<h3>下载报告文件</h3><p class="muted">先下载 requirements_zh.csv、descriptions.md、role_descriptions.md、evidence_gaps.md。dashboard.html 下载后在本机浏览器打开。完整来源审计可能包含原始职位文本，请勿不加检查地公开。</p><div id="files" class="files"></div>
+<details><summary>本次审计信息与警告</summary><pre id="manifest"></pre></details></div>
+<h3>历史报告（最近 30 次）</h3><div id="runs"></div></section>
+<footer>本地单用户工具，不要映射到公网或共享给其他用户。数据保存在上方目录；停止服务后可备份或删除该目录。高级人工复核、候选人证据映射及自定义岗位配置见 README_CLI.md 与 docs/FIRST_RUN.md。</footer>
+</main></body></html>
