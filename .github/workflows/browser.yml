@@ -24,9 +24,17 @@ jobs:
           python scripts/run_advanced_browser.py
           python scripts/run_collection_guidance_browser.py
           python scripts/run_resume_browser.py
+          python scripts/run_guided_browser.py
       - name: Save browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: browser-acceptance
           path: browser-acceptance/
+      - name: Build source release candidate
+        run: python scripts/build_candidate.py
+      - name: Save source release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-release-candidate
+          path: release-candidate/
