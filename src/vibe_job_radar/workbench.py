@@ -151,16 +151,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             result = getattr(self.server.workspace, methods[route])(data)
-            self._json(200, result)
+            status, response = 200, result
         except InputError as exc:
-            self._json(400, {"error": str(exc)})
+            status, response = 400, {"error": str(exc)}
         except (ValueError, TypeError) as exc:
             # Core exceptions may contain user data: show the type, not raw contents.
-            self._json(400, {"error": f"输入校验失败 [{type(exc).__name__}]；请核对字段、来源链接及正文。"})
+            status, response = 400, {"error": f"输入校验失败 [{type(exc).__name__}]；请核对字段、来源链接及正文。"}
         except Exception as exc:
-            self._json(500, {"error": f"操作失败 [{type(exc).__name__}]；请检查网络/API额度或本地目录。"})
+            status, response = 500, {"error": f"操作失败 [{type(exc).__name__}]；请检查网络/API额度或本地目录。"}
         finally:
             self.server.mutation_lock.release()
+        # A successful response must mean the write lock is already released.
+        self._json(status, response)
 
     def do_OPTIONS(self):
         self._json(403, {"error": "不开放跨站调用。"})
