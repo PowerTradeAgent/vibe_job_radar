@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import platform
 import re
@@ -43,7 +44,7 @@ def _redact(value, secret: str):
     if isinstance(value, list):
         return [_redact(item, secret) for item in value]
     if isinstance(value, dict):
-        return {_redact(key, secret): _redact(item, secret) for key, item in value.items()}
+        return {key: _redact(item, secret) for key, item in value.items()}
     return value
 
 
@@ -175,7 +176,7 @@ class Workspace:
             stream.write(content)
         jobs = []
         errors = []
-        for index, (_, item) in enumerate(iter_items(path), 1):
+        for index, (generated_ref, item) in enumerate(iter_items(path), 1):
             if index > 1000:
                 errors.append("单批最多 1000 条，请拆分文件。")
                 break
@@ -185,7 +186,13 @@ class Workspace:
             try:
                 if item.is_synthetic:
                     raise InputError("合成样例不能导入真实数据库；请使用演示按钮。")
-                item = replace(item, rights_note=item.rights_note or rights)
+                # Transport filenames are random; source identity must not be.
+                # Include the row index and content hash, never a temporary path.
+                source_ref = item.source_ref
+                if source_ref == generated_ref:
+                    source_ref = "upload:" + hashlib.sha256(content.encode("utf-8")).hexdigest() + f":{index}"
+                item = replace(item, rights_note=item.rights_note or rights,
+                               source_ref=source_ref, record_id="")
                 self._check_source(item)
                 jobs.append(item)
             except ValueError as exc:
@@ -233,7 +240,9 @@ class Workspace:
             report = discover(_SearchStore(store, key), self.config, api_key=key, plan=build_plan(self.config, platforms, roles),
                               max_requests=budget, pages=1, count=10)
         # Provider errors must never persist an accidentally echoed credential.
-        report = _redact(report, key)
+        for task in report["tasks"]:
+            task["error"] = _redact(task["error"], key)
+        report["rejected_results"] = _redact(report["rejected_results"], key)
         path = self.root / "discovery" / (uuid.uuid4().hex + ".json")
         path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         states = Counter(task["status"] for task in report["tasks"])
