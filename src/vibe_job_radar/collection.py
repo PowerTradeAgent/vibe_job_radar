@@ -21,6 +21,7 @@ from .network import FetchError, SafeHTTP, SiteFetcher
 from .store import Store
 from .utils import atomic_json, canonical_url, domain_matches, parse_time, utc_now
 from .workspace import InputError, Workspace, text_field
+from .url_safety import credential_query_key
 
 ID = re.compile(r"[a-f0-9]{32}")
 TERMINAL = {"completed", "needs_attention", "empty"}
@@ -40,7 +41,7 @@ def safe_url(value):
     p = urlsplit(value)
     if not value or p.scheme != "https" or p.port not in (None, 443):
         raise InputError("只支持不带登录凭据的 HTTPS 标准端口链接。")
-    if any(re.search(r"token|cookie|session|password|authorization|api.?key", key, re.I) for key, _ in parse_qsl(p.query)):
+    if any(credential_query_key(key) for key, _ in parse_qsl(p.query)):
         raise InputError("URL 包含疑似凭据参数，请使用不带凭据的链接。")
     return value
 
@@ -435,8 +436,11 @@ def main(argv=None):
     p.add_argument("--run-id", required=True)
     args = p.parse_args(argv)
     service = Collector(Workspace(args.workspace))
+    mode = service.status({"id": args.run_id})["mode"]
+    key_name = {"search": "BRAVE_SEARCH_API_KEY", "feed": "RADAR_FEED_TOKEN"}.get(mode)
+    key = os.environ.get(key_name, "") if key_name else ""
     while True:
-        state = service.step({"id": args.run_id, "api_key": os.environ.get("RADAR_FEED_TOKEN", "")})
+        state = service.step({"id": args.run_id, "api_key": key})
         print(json.dumps({k: state[k] for k in ("id", "status", "phase", "search_requests", "detail_attempts", "feed_requests")}), flush=True)
         if state["status"] in TERMINAL:
             return 0 if state["status"] == "completed" else 2
