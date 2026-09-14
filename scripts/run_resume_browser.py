@@ -80,8 +80,12 @@ def main():
                         page.locator('#collect-history').select_option(task['id'])
                         with patch('vibe_job_radar.collection.SafeHTTP') as no_search:
                             page.locator('#collect-resume').click()
-                            expect(page.locator('#collect-progress')).to_contain_text('empty', timeout=30000)
+                            expect(page.locator('#collect-progress')).to_contain_text('needs_attention', timeout=30000)
                             expect(page.locator('#collect-resume')).to_be_enabled()
+                            final = server.collector.status({'id': task['id']})
+                            assert final['status'] == 'needs_attention'
+                            assert final['report_id'] and final['search_requests'] == 0
+                            assert (server.workspace.root/'reports'/final['report_id']/'run_manifest.json').is_file()
                             assert no_search.return_value.json.call_count == 0
                         result['checks'].append(f'search-origin {phase} phase completes without Brave Key or search request')
                     assert not result['page_errors'] and not result['external_browser_requests']
