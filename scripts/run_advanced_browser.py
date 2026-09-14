@@ -56,7 +56,7 @@ def main():
                         remote.return_value.fetch.return_value=Response(200,{'content-type':'text/html'},html.encode(),'https://www.zhipin.com/job_detail/browser-artificial.html')
                         page.locator('#collect-start').click()
                         expect(page.locator('#collect-progress')).to_contain_text('completed',timeout=30000)
-                        self_state=json.loads(page.locator('#collect-json').inner_text())
+                        self_state=json.loads(page.locator('#collect-json').text_content())
                         expect(page.locator('#collect-start')).to_be_enabled()
                         assert remote.return_value.fetch.call_count==1
                     results['checks'].append('browser automatically completes URL acquisition, ingestion and report generation with mocked remote HTML')
@@ -70,6 +70,7 @@ def main():
                     rf.locator('[name=reason]').fill('已核对人工测试原文，仅用于验收。')
                     rf.locator('button[type=submit]').click()
                     expect(page.locator('#revision')).to_contain_text('版本 1')
+                    page.locator('#requirement-list .card').first.locator('details summary').click()
                     assert page.locator('#requirement-list .card').first.locator('pre').inner_text() == '🧪 测试说明。要求熟练使用 Cursor 进行 AI 辅助编程，并完成单元测试和代码审查。'
                     results['checks'].append('original JD, including non-BMP text, is displayed with exact source-span highlighting and a versioned review')
                     ef=page.locator('#evidence-form')
