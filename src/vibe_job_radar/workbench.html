@@ -13,6 +13,7 @@
 <header><div class="tag">EVIDENCE FIRST / LOCAL WORKSPACE</div><h1>招聘要求 → 逐条证据 → 可量化描述</h1>
 <p class="intro">先用演示熟悉输出，再粘贴你有权处理的真实职位文本。离线分析不需要 API Key，也不需要把招聘平台账号交给本项目。</p>
 <p class="warning">当前不是“全平台自动爬取器”。已配置域名 ≠ 已登录平台；摘要 ≠ 完整正文；要求并集 ≠ 本人完全满足。</p></header>
+<section><h2>自动采集与个人证据</h2><a href="/advanced">进入自动采集 / 原文复核 / 附件与量化指标工作台</a><p>无需手写 JSON。原有录入、演示与报告入口继续保留。</p></section>
 <div id="notice" role="status" aria-live="polite"></div>
 <section><h2>1. 检查环境与数据</h2><p id="workspace" class="muted"></p><p id="counts" class="stats">正在读取本地数据…</p>
 <button id="doctor" type="button" class="secondary">环境自检（不联网）</button><button id="demo" type="button">运行合成演示</button><button id="refresh" type="button" class="secondary">刷新数据</button>
@@ -59,5 +60,5 @@
 <h3>下载报告文件</h3><p class="muted">先下载 requirements_zh.csv、descriptions.md、role_descriptions.md、evidence_gaps.md。dashboard.html 下载后在本机浏览器打开。完整来源审计可能包含原始职位文本，请勿不加检查地公开。</p><div id="files" class="files"></div>
 <details><summary>本次审计信息与警告</summary><pre id="manifest"></pre></details></div>
 <h3>历史报告（最近 30 次）</h3><div id="runs"></div></section>
-<footer>本地单用户工具，不要映射到公网或共享给其他用户。数据保存在上方目录；停止服务后可备份或删除该目录。高级人工复核、候选人证据映射及自定义岗位配置见 README_CLI.md 与 docs/FIRST_RUN.md。</footer>
+<footer>本地单用户工具，不要映射到公网或共享给其他用户。数据保存在上方目录；停止服务后可备份或删除该目录。人工复核和个人证据可从上方高级工作台进入；CLI 继续兼容。</footer>
 </main></body></html>

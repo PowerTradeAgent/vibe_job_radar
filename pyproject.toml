@@ -15,9 +15,10 @@ dependencies = []
 [project.scripts]
 vibe-radar = "vibe_job_radar.cli:main"
 vibe-radar-ui = "vibe_job_radar.workbench:main"
+vibe-radar-collect = "vibe_job_radar.collection:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-vibe_job_radar = ["defaults.json", "workbench.html", "workbench.js"]
+vibe_job_radar = ["defaults.json", "workbench.html", "workbench.js", "advanced.html", "advanced.js"]

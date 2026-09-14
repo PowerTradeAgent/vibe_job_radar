@@ -186,6 +186,8 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
         write_csv(staging / "ats_keywords.csv", tool_rows, ["tool", "job_count", "requirement_ids", "note"])
         atomic_json(staging / "reviews.template.json", {r.requirement_id: {"decision": "pending", "reviewer": "", "reason": ""} for r in pending})
         atomic_json(staging / "candidate.template.json", {"name": "待填写", "evidence": []})
+        atomic_json(staging / "candidate.effective.json", candidate)
+        atomic_json(staging / "reviews.effective.json", reviews)
         atomic_json(staging / "effective_config.json", conf)
         atomic_json(staging / "llm_audit.json", llm.audit if llm else [])
         atomic_text(staging / "descriptions.md", claims)

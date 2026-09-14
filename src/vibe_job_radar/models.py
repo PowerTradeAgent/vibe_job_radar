@@ -5,7 +5,7 @@ from typing import Any
 from .utils import canonical_url, compact, digest, parse_time, utc_now
 
 LEVELS = {"full_text", "snippet"}
-MODES = {"manual", "public_fetch", "search_api", "synthetic"}
+MODES = {"manual", "public_fetch", "search_api", "synthetic", "authorized_feed"}
 STRENGTHS = {"required", "expected", "preferred", "not_required", "prohibited", "unspecified"}
 RELATIONS = {"direct", "contextual", "role_related"}
 

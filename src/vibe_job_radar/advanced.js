@@ -1,0 +1,111 @@
+"use strict";
+const $ = id => document.getElementById(id);
+const token = sessionStorage.getItem("radar-session") || "";
+let profile = null, page = 0, total = 0, runId = "", activeCollection = "", looping = false, collecting = false;
+let selected = new Map(), metrics = [], busy = false;
+const note = text => { $("notice").textContent = text; };
+async function api(path, data={}) {
+  const response = await fetch(path, {method:"POST", cache:"no-store", headers:{"Content-Type":"application/json","X-Radar-Token":token}, body:JSON.stringify(data)});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+  return result;
+}
+async function act(fn) {
+  if (busy || collecting) { note("已有操作执行中，请先暂停连续采集或完成当前操作。"); return; }
+  busy = true;
+  try { await fn(); } catch(error) { note(error.message || "操作失败"); } finally { busy=false; }
+}
+function options(select, values, value="") {
+  select.replaceChildren();
+  for (const [key,label] of Object.entries(values)) { const o=document.createElement("option");o.value=key;o.textContent=label;select.append(o); }
+  if ([...select.options].some(o=>o.value===value)) select.value=value;
+}
+function checks(id, values, checked=[]) {
+  $(id).replaceChildren();
+  for (const [key,label] of Object.entries(values)) { const l=document.createElement("label"),i=document.createElement("input");i.type="checkbox";i.value=key;i.checked=checked.includes(key);l.append(i,label);$(id).append(l); }
+}
+const chosen=id=>[...$(id).querySelectorAll("input:checked")].map(i=>i.value);
+function setChecks(id, values) { for(const i of $(id).querySelectorAll("input"))i.checked=values.includes(i.value); }
+function text(tag, value) { const e=document.createElement(tag); e.textContent=value;return e; }
+function button(label, fn) {const b=text("button",label); b.type="button";b.addEventListener("click",()=>act(fn));return b;}
+function table(id, headers, rows) {
+  const t=document.createElement("table"),head=document.createElement("tr");headers.forEach(h=>head.append(text("th",h)));t.append(head);
+  rows.forEach(row=>{const tr=document.createElement("tr");row.forEach(v=>tr.append(text("td",String(v??""))));t.append(tr);});$(id).replaceChildren(t);
+}
+async function download(path, filename) {
+  const response=await fetch(path,{headers:{"X-Radar-Token":token},cache:"no-store"});
+  if(!response.ok)throw new Error((await response.json()).error||"下载失败");
+  const url=URL.createObjectURL(await response.blob()),a=document.createElement("a");a.href=url;a.download=filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);note(`已请求下载 ${filename}。`);
+}
+function reportDownloads(report, target) {
+  $(target).replaceChildren();
+  for(const name of report.files) $(target).append(button(name,()=>download(`/api/download/${report.id}/${encodeURIComponent(name)}`,name)));
+}
+async function refreshProfile(newState) {
+  profile=newState||await api("/api/evidence/state");
+  $("revision").textContent=`个人证据版本 ${profile.revision} · 已保存证据 ${profile.evidence.length} · 已复核条目 ${Object.keys(profile.reviews).length}`;
+  const old=$("source-run").value;
+  options($("source-run"),Object.fromEntries(profile.runs.map(r=>[r.id,`${r.created_at} · ${r.stats.requirement_rows} 条 · ${r.id.slice(0,8)}`])),old);
+  options($("artifact-select"),{"":"无附件 / 使用外部引用",...Object.fromEntries(profile.artifacts.map(a=>[a.id,`${a.name} · ${a.size} 字节 · ${a.id.slice(0,12)}`]))},$("artifact-select").value);
+  if(!$("capabilities").childElementCount)checks("capabilities",profile.capabilities);
+  if(!$("metric-id").options.length)options($("metric-id"),Object.fromEntries(profile.metrics.map(m=>[m.metric_id,`${m.label} (${m.unit})`])));
+  if(!$("evidence-form").elements.name.value)$("evidence-form").elements.name.value=profile.name;
+  $("revision-history").textContent=profile.history.map(h=>`${h.revision} · ${h.created_at} · ${h.action}`).join("\n")||"尚无修改记录。";
+  $("saved-evidence").replaceChildren();
+  for(const e of profile.evidence){const card=document.createElement("div");card.className="card";card.append(text("h3",`${e.project} · ${e.scope} · ${e.review_status}`),text("p",e.contribution),text("p",`${e.requirement_ids.length} 个精确要求映射 · ${e.metrics.length} 项指标`));
+    card.append(button("编辑证据",()=>editEvidence(e)),button("撤回证据",async()=>{if(!confirm("从当前资料撤回？旧报告和审计历史仍保留。"))return;await refreshProfile(await api("/api/evidence/remove",{expected_revision:profile.revision,evidence_id:e.evidence_id}));note("当前资料已撤回该证据，历史仍保留。");}));
+    if(e.artifact_id)card.append(button("下载原始附件",()=>download(`/api/evidence/attachment/${e.artifact_id}`,profile.artifacts.find(a=>a.id===e.artifact_id)?.name||e.artifact_id)));
+    $("saved-evidence").append(card);}
+  metricContract();
+}
+function mappingCount(){ $("selection-count").textContent=`已选择 ${selected.size} 条要求（跨页保留）`;$("evidence-mapping").textContent=`当前证据映射：${selected.size} 条；来源报告 ${runId.slice(0,8)||"未选择"}`; }
+async function loadRequirements(reset=false) {
+  const nextRun=$("source-run").value;
+  if(!nextRun)throw new Error("先在基础工作台生成真实输入报告，或完成一次真实数据采集。");
+  if(reset||nextRun!==runId){page=0;selected=new Map();}
+  runId=nextRun;
+  const result=await api("/api/evidence/catalogue",{run_id:runId,query:$("requirement-query").value,page});total=result.total;
+  // Do not silently refresh the optimistic revision while the user is editing.
+  $("requirement-list").replaceChildren();
+  for(const row of result.rows){const card=document.createElement("div");card.className="card";const label=document.createElement("label"),check=document.createElement("input");check.type="checkbox";check.checked=selected.has(row.requirement_id);check.setAttribute("data-rid",row.requirement_id);
+    check.addEventListener("change",()=>{if(check.checked){selected.set(row.requirement_id,row.capability);const cap=[...$("capabilities").querySelectorAll("input")].find(i=>i.value===row.capability);if(cap)cap.checked=true;}else selected.delete(row.requirement_id);mappingCount();});
+    label.append(check,`${row.title} · ${profile.capabilities[row.capability]||row.capability} · ${row.strength} · ${row.evidence_level}`);card.append(label,text("p",row.quote));card.append(text("small",`${row.requirement_id} · ${row.relation} · 复核 ${row.saved_review?.decision||row.review_status}`));
+    const details=document.createElement("details");details.append(text("summary","完整职位原文与引用位置"));const pre=document.createElement("pre");const characters=Array.from(row.source_text);pre.append(document.createTextNode(characters.slice(0,row.start).join("")),text("mark",row.quote),document.createTextNode(characters.slice(row.end).join("")));details.append(pre,text("p",row.url));card.append(details);
+    card.append(button("复核此条",async()=>{const f=$("review-form");f.elements.requirement_id.value=row.requirement_id;f.elements.decision.value=row.saved_review?.decision||"approve";f.elements.reviewer.value=row.saved_review?.reviewer||"";f.elements.reason.value=row.saved_review?.reason||"";$("review-source").textContent=row.source_text;$("review-panel").open=true;$("review-panel").scrollIntoView({block:"center"});}));$("requirement-list").append(card);}
+  $("pagination").textContent=`第 ${page+1} 页 / ${Math.max(1,Math.ceil(total/50))} 页，共 ${total} 条`;
+  $("prev-page").disabled=page===0;$("next-page").disabled=(page+1)*50>=total;mappingCount();
+}
+function metricData(){const f=$("metric-form").elements,d={metric_id:f.metric_id.value,current:Number(f.current.value),sample_size:Number(f.sample_size.value),window:f.window.value,comparison_basis:f.comparison_basis.value};
+  if(!f.current.value||!f.sample_size.value)throw new Error("请填写当前值和样本量（0 必须明确填写）。");
+  if(f.baseline.value!=="")Object.assign(d,{baseline:Number(f.baseline.value),baseline_sample_size:Number(f.baseline_sample_size.value),baseline_window:f.baseline_window.value});return d;}
+function metricContract(){const m=profile?.metrics.find(m=>m.metric_id===$("metric-id").value);$("metric-contract").textContent=m?`${m.formula}；${m.measurement_contract}`:"";}
+function renderMetrics(){ $("metric-list").replaceChildren();metrics.forEach((m,i)=>{const card=document.createElement("div");card.className="card";card.append(text("p",`${m.metric_id}：基线 ${m.baseline??"未提供"} → 当前 ${m.current}；样本 ${m.sample_size}；窗口 ${m.window}`));card.append(button("移除此指标",async()=>{metrics.splice(i,1);renderMetrics();}));$("metric-list").append(card);}); }
+async function editEvidence(e){
+  const f=$("evidence-form").elements;for(const key of ["evidence_id","project","contribution","scope","review_status","artifact_id","external_url","reviewer"])f[key].value=e[key]||"";f.name.value=profile.name;f.attested.checked=false;
+  if(![...$("source-run").options].some(o=>o.value===e.source_run_id)){$("source-run").append(new Option(e.source_run_id,e.source_run_id));}
+  $("source-run").value=e.source_run_id;runId=e.source_run_id;page=0;selected=new Map(e.requirement_ids.map(rid=>[rid,""]));metrics=structuredClone(e.metrics);setChecks("capabilities",e.capabilities);renderMetrics();await loadRequirements(false);note("正在编辑已有证据；修改后需重新确认真实性。");}
+$("load-requirements").onclick=()=>act(()=>loadRequirements(true));
+$("reload-state").onclick=()=>act(async()=>{await refreshProfile();note("已读取最新版本；请核对未保存的编辑再提交。");});
+$("prev-page").onclick=()=>act(async()=>{if(page>0){page--;await loadRequirements();}});
+$("next-page").onclick=()=>act(async()=>{if((page+1)*50<total){page++;await loadRequirements();}});
+$("review-form").onsubmit=event=>{event.preventDefault();act(async()=>{const d=Object.fromEntries(new FormData(event.target));await refreshProfile(await api("/api/evidence/review",{...d,run_id:runId,expected_revision:profile.revision}));await loadRequirements();note("复核已保存。摘要仍是摘要，不会因此成为正文。");});};
+$("upload-form").onsubmit=event=>{event.preventDefault();act(async()=>{const file=$("evidence-file").files[0];if(!file||file.size>1000000)throw new Error("请选择不超过 1 MB 的附件。");const bytes=new Uint8Array(await file.arrayBuffer());let binary="";for(let i=0;i<bytes.length;i+=8192)binary+=String.fromCharCode(...bytes.subarray(i,i+8192));const result=await api("/api/evidence/upload",{name:file.name,content_base64:btoa(binary),rights_confirmed:event.target.elements.rights_confirmed.checked});await refreshProfile();$("artifact-select").value=result.artifact_id;$("evidence-form").elements.external_url.value="";$("upload-result").textContent=`已上传 ${result.size} 字节；SHA-256 ${result.sha256}`;note("附件已保存，可在证据表单中使用。");});};
+$("metric-id").onchange=metricContract;
+$("metric-preview").onclick=()=>act(async()=>{$("metric-preview-text").textContent=(await api("/api/evidence/metric",metricData())).description;});
+$("metric-form").onsubmit=event=>{event.preventDefault();act(async()=>{const d=metricData(),result=await api("/api/evidence/metric",d);metrics.push(d);renderMetrics();$("metric-preview-text").textContent=result.description;note("指标已添加到当前编辑表单；需保存证据才会持久化。");});};
+$("evidence-form").onsubmit=event=>{event.preventDefault();act(async()=>{if(runId!==$("source-run").value)throw new Error("请先加载当前选择报告的要求，防止跨报告误映射。");const d=Object.fromEntries(new FormData(event.target));Object.assign(d,{run_id:runId,expected_revision:profile.revision,metrics,requirement_ids:[...selected.keys()],capabilities:chosen("capabilities"),attested:event.target.elements.attested.checked});await refreshProfile(await api("/api/evidence/save",d));event.target.elements.evidence_id.value=profile.evidence[profile.evidence.length-1].evidence_id;note("个人证据已保存。重新生成报告后才会体现本次修改。");});};
+$("new-evidence").onclick=()=>act(async()=>{$("evidence-form").reset();$("evidence-form").elements.evidence_id.value="";$("evidence-form").elements.name.value=profile.name;metrics=[];selected=new Map();renderMetrics();setChecks("capabilities",[]);mappingCount();if(runId)await loadRequirements();});
+$("generate").onclick=()=>act(async()=>{const result=await api("/api/evidence/generate",{run_id:$("source-run").value,expected_revision:profile.revision});$("generated-summary").textContent=`个人报告 ${result.id} · 版本 ${profile.revision}。证据映射覆盖率不是录用概率。`;$("generated-descriptions").textContent=result.descriptions;
+  table("generated-coverage",["岗位","人工声明映射覆盖率","说明"],result.coverage.map(r=>[r.title,r.evidence_mapping_coverage,r.note]));table("generated-matrix",["要求ID","状态","证据ID","说明"],result.matrix.map(r=>[r.requirement_id,r.status,r.evidence_ids,r.note]));reportDownloads(result,"downloads");await refreshProfile();note("个人报告已生成，旧报告保持不变。");});
+$("export-evidence").onclick=()=>act(()=>download("/api/evidence/export","personal-evidence.zip"));
+async function refreshCollections(){const result=await api("/api/collection/list");options($("collect-history"),Object.fromEntries(result.runs.map(s=>[s.id,`${s.updated_at} · ${s.mode} · ${s.status} · ${s.id.slice(0,8)}`])),activeCollection);}
+function showCollection(s){activeCollection=s.id;$("collect-progress").textContent=`任务 ${s.id.slice(0,8)} · ${s.status} · 阶段 ${s.phase} · 搜索 ${s.search_requests}/${s.search_budget} · 正文尝试 ${s.detail_attempts}/${s.detail_budget} · 数据源页 ${s.feed_requests}/${s.feed_budget}`;table("collect-summary",["平台","搜索请求","正文状态","平台接入认证"],Object.entries(s.platform_summary).map(([k,v])=>[k,v.queries_attempted,JSON.stringify(v.detail_outcomes),"未认证；仅显示本次观测"]));$("collect-json").textContent=JSON.stringify(s,null,2);$("collect-result").replaceChildren();if(s.report_id){$("collect-result").append(button("下载采集审计",()=>download(`/api/download/${s.report_id}/collection_manifest.json`,"collection_manifest.json")),button("下载逐条要求",()=>download(`/api/download/${s.report_id}/requirements_zh.csv`,"requirements_zh.csv")));}}
+async function continueCollection(){if(busy||collecting)return;collecting=true;looping=true;$("collect-pause").disabled=false;$("collect-start").disabled=true;try{while(looping){const s=await api("/api/collection/step",{id:activeCollection,api_key:$("collect-form").elements.api_key.value});showCollection(s);if(["completed","needs_attention","empty"].includes(s.status)){looping=false;$("collect-form").elements.api_key.value="";note(`采集结束：${s.status}。请核对各平台失败和预算跳过项。`);await refreshProfile();break;}await new Promise(resolve=>setTimeout(resolve,30));}}catch(error){note(error.message);looping=false;}finally{looping=false;collecting=false;$("collect-pause").disabled=true;$("collect-start").disabled=false;await refreshCollections();}}
+$("collect-form").onsubmit=async event=>{event.preventDefault();if(collecting||busy)return;let created=false;await act(async()=>{const f=event.target.elements,d=Object.fromEntries(new FormData(event.target));delete d.api_key;Object.assign(d,{roles:chosen("collect-roles"),platforms:chosen("collect-platforms"),permit_platforms:chosen("collect-permits"),consent:f.consent.checked,search_storage_rights:f.search_storage_rights.checked});for(const k of ["search_budget","detail_budget","feed_budget","fresh_hours","pages"])d[k]=Number(d[k]);showCollection(await api("/api/collection/start",d));await refreshCollections();created=true;});if(created)await continueCollection();};
+$("collect-pause").onclick=()=>{looping=false;note("已请求暂停；当前请求结束后不再发出下一次请求。任务进度已保留。");};
+$("collect-resume").onclick=async()=>{if(collecting||busy)return;activeCollection=$("collect-history").value||activeCollection;if(!activeCollection){note("请先创建或选择一个任务。");return;}await continueCollection();};
+$("collect-load").onclick=()=>act(async()=>showCollection(await api("/api/collection/status",{id:$("collect-history").value})));
+$("collect-refresh").onclick=()=>act(refreshCollections);
+$("platform-form").onsubmit=event=>{event.preventDefault();act(async()=>{const result=await api("/api/collection/register",Object.fromEntries(new FormData(event.target)));await init();note(result.message);});};
+async function init(){if(!token)throw new Error("请先从启动器地址打开基础工作台，再进入本页面。");const response=await fetch("/api/status",{headers:{"X-Radar-Token":token},cache:"no-store"});const s=await response.json();if(!response.ok)throw new Error(s.error);const platforms=Object.fromEntries(Object.entries(s.platforms).map(([k,v])=>[k,`${v.label} (${v.domains.join(",")})`]));checks("collect-platforms",platforms,Object.keys(platforms));checks("collect-roles",s.roles,Object.keys(s.roles));checks("collect-permits",platforms,[]);await refreshProfile();await refreshCollections();mappingCount();}
+init().catch(error=>note(error.message));
