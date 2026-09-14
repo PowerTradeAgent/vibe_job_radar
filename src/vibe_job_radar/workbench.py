@@ -15,6 +15,8 @@ from urllib.parse import quote, unquote, urlsplit
 
 from .workspace import InputError, Workspace
 from .collection import Collector
+from .guided.service import GuidedService, MESSAGES
+from .guided.contracts import CrawlError
 from .collection_guidance import CollectionGuidance
 from .evidence_ui import Conflict, EvidenceService
 
@@ -30,11 +32,16 @@ class LocalServer(ThreadingHTTPServer):
         self.collector = Collector(workspace)
         self.guidance = CollectionGuidance(workspace)
         self.evidence = EvidenceService(workspace)
+        self.guided = GuidedService(workspace)
         self.token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()
         super().__init__(("127.0.0.1", port), Handler)
         self.authority = f"127.0.0.1:{self.server_address[1]}"
         self.origin = f"http://{self.authority}"
+
+    def server_close(self):
+        self.guided.close()
+        super().server_close()
 
     @property
     def entry_url(self) -> str:
@@ -89,14 +96,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js"}
+        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js"}[path]
+                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
+            elif path == "/api/guided/state":
+                self._json(200, self.server.guided.state())
             elif path == "/api/evidence/export":
                 self._respond(200, self.server.evidence.export(), "application/zip", filename="personal-evidence.zip")
             elif path.startswith("/api/evidence/attachment/"):
@@ -155,7 +164,10 @@ class Handler(BaseHTTPRequestHandler):
         methods = {"/api/job": "add_job", "/api/import": "import_file", "/api/plan": "plan",
                    "/api/discover": "discover", "/api/analyze": "analyze"}
         target = self.server.workspace
-        if route.startswith("/api/evidence/"):
+        if route.startswith("/api/guided/"):
+            target = self.server.guided
+            methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "diagnose", "export")}
+        elif route.startswith("/api/evidence/"):
             target = self.server.evidence
             methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "review", "upload", "metric", "save", "remove", "generate")}
         elif route.startswith("/api/collection/"):
@@ -170,6 +182,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             result = getattr(target, methods[route])(data)
             status, response = 200, result
+        except CrawlError as exc:
+            status, response = 400, {"error": MESSAGES.get(exc.code, "请检查平台、输入和当前任务状态。"), "code": exc.code}
         except Conflict as exc:
             status, response = 409, {"error": str(exc)}
         except InputError as exc:
@@ -189,7 +203,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Vibe Job Radar 本地浏览器工作台（不自动登录招聘平台）")
+    parser = argparse.ArgumentParser(description="Vibe Job Radar 本地浏览器工作台（可选受控浏览器与人工登录协助）")
     parser.add_argument("--workspace", type=Path, default=Path.home() / ".vibe-job-radar")
     parser.add_argument("--port", type=int, default=0, help="默认由系统选择空闲端口，仅绑定 127.0.0.1")
     parser.add_argument("--no-browser", action="store_true")
