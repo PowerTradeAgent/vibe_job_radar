@@ -2,6 +2,7 @@
 const $ = id => document.getElementById(id);
 const token = sessionStorage.getItem("radar-session") || "";
 let profile = null, page = 0, total = 0, runId = "", activeCollection = "", looping = false, collecting = false;
+let collectionGuide = null;
 let selected = new Map(), metrics = [], busy = false, snapshotCapabilities = {};
 const note = text => { $("notice").textContent = text; };
 async function api(path, data={}) {
@@ -16,6 +17,7 @@ function updateButtons() {
   $("collect-pause").disabled=!collecting;
   $("prev-page").disabled=locked||page===0;
   $("next-page").disabled=locked||(page+1)*50>=total;
+  if (collectionGuide) collectionGuide.sync(locked);
 }
 async function act(fn) {
   if (busy || collecting) { note("已有操作执行中，请先暂停连续采集或完成当前操作。"); return; }
@@ -110,11 +112,40 @@ $("export-evidence").onclick=()=>act(()=>download("/api/evidence/export","person
 async function refreshCollections(){const result=await api("/api/collection/list");options($("collect-history"),Object.fromEntries(result.runs.map(s=>[s.id,`${s.updated_at} · ${s.mode} · ${s.status} · ${s.id.slice(0,8)}`])),activeCollection);}
 function showCollection(s){activeCollection=s.id;$("collect-progress").textContent=`任务 ${s.id.slice(0,8)} · ${s.status} · 阶段 ${s.phase} · 搜索 ${s.search_requests}/${s.search_budget} · 正文尝试 ${s.detail_attempts}/${s.detail_budget} · 数据源页 ${s.feed_requests}/${s.feed_budget}`;table("collect-summary",["平台","搜索请求","正文状态","平台接入认证"],Object.entries(s.platform_summary).map(([k,v])=>[k,v.queries_attempted,JSON.stringify(v.detail_outcomes),"未认证；仅显示本次观测"]));$("collect-json").textContent=JSON.stringify(s,null,2);$("collect-result").replaceChildren();if(s.report_id){$("collect-result").append(button("下载采集审计",()=>download(`/api/download/${s.report_id}/collection_manifest.json`,"collection_manifest.json")),button("下载逐条要求",()=>download(`/api/download/${s.report_id}/requirements_zh.csv`,"requirements_zh.csv")));}}
 async function continueCollection(){if(busy||collecting)return;collecting=true;looping=true;updateButtons();try{while(looping){const s=await api("/api/collection/step",{id:activeCollection,api_key:$("collect-form").elements.api_key.value});showCollection(s);if(["completed","needs_attention","empty"].includes(s.status)){looping=false;$("collect-form").elements.api_key.value="";note(`采集结束：${s.status}。请核对各平台失败和预算跳过项。`);await refreshProfile();break;}await new Promise(resolve=>setTimeout(resolve,30));}}catch(error){note(error.message);looping=false;}finally{looping=false;try{await refreshCollections();}catch(error){note(error.message);}finally{collecting=false;updateButtons();}}}
-$("collect-form").onsubmit=async event=>{event.preventDefault();if(collecting||busy)return;let created=false;await act(async()=>{const f=event.target.elements,d=Object.fromEntries(new FormData(event.target));delete d.api_key;Object.assign(d,{roles:chosen("collect-roles"),platforms:chosen("collect-platforms"),permit_platforms:chosen("collect-permits"),consent:f.consent.checked,search_storage_rights:f.search_storage_rights.checked});for(const k of ["search_budget","detail_budget","feed_budget","fresh_hours","pages"])d[k]=Number(d[k]);showCollection(await api("/api/collection/start",d));await refreshCollections();created=true;});if(created)await continueCollection();};
+$("collect-form").onsubmit=async event=>{event.preventDefault();if(collecting||busy)return;let created=false;await act(async()=>{const d=collectionGuide.data();const check=await api("/api/collection/preview",d);collectionGuide.render(check);if(!check.ready)return;delete d.api_key;showCollection(await api("/api/collection/start",d));await refreshCollections();created=true;});if(created)await continueCollection();};
 $("collect-pause").onclick=()=>{looping=false;note("已请求暂停；当前请求结束后不再发出下一次请求。任务进度已保留。");};
-$("collect-resume").onclick=async()=>{if(collecting||busy)return;activeCollection=$("collect-history").value||activeCollection;if(!activeCollection){note("请先创建或选择一个任务。");return;}await continueCollection();};
+$("collect-resume").onclick=async()=>{
+  if(collecting||busy)return;
+  activeCollection=$("collect-history").value||activeCollection;
+  if(!activeCollection){note("请先创建或选择一个任务。");return;}
+  let resume=false;
+  await act(async()=>{
+    const saved=await api("/api/collection/status",{id:activeCollection});
+    const switched=$("collect-form").elements.mode.value!==saved.mode;
+    collectionGuide.selectMode(saved.mode);
+    showCollection(saved);
+    if(["completed","needs_attention","empty"].includes(saved.status)){
+      note("所选任务已经结束；继续不会重试已结束的请求。需要重试时请核对原因后新建任务。");
+      return;
+    }
+    const key=$("collect-form").elements.api_key.value.trim();
+    // Credentials are required by the current phase, not by the original route.
+    if(saved.phase==="search"&&!key&&!collectionGuide.keyConfigured)
+      throw new Error("所选任务仍在搜索阶段：请先填入自己的 Brave Key，再点击继续；任务尚未执行。");
+    if(saved.phase==="feed"&&switched){
+      note("已切换到数据源任务，尚未发出请求。请补填该数据源 Token 后再点继续；只有提供方明确无需 Token 时才确认无 Token 继续。");
+      return;
+    }
+    if(saved.phase==="feed"&&!key&&!window.confirm("未填写数据源 Token。只有提供方明确允许无需 Token 访问时，才确认无 Token 继续；否则点取消，先填 Token。")){
+      note("已取消继续；未发出采集请求，未消耗任务预算。请补填数据源 Token。");
+      return;
+    }
+    resume=true;
+  });
+  if(resume)await continueCollection();
+};
 $("collect-load").onclick=()=>act(async()=>showCollection(await api("/api/collection/status",{id:$("collect-history").value})));
 $("collect-refresh").onclick=()=>act(refreshCollections);
 $("platform-form").onsubmit=event=>{event.preventDefault();act(async()=>{const result=await api("/api/collection/register",Object.fromEntries(new FormData(event.target)));await init();note(result.message);});};
-async function init(){if(!token)throw new Error("请先从启动器地址打开基础工作台，再进入本页面。");const response=await fetch("/api/status",{headers:{"X-Radar-Token":token},cache:"no-store"});const s=await response.json();if(!response.ok)throw new Error(s.error);const platforms=Object.fromEntries(Object.entries(s.platforms).map(([k,v])=>[k,`${v.label} (${v.domains.join(",")})`]));checks("collect-platforms",platforms,Object.keys(platforms));checks("collect-roles",s.roles,Object.keys(s.roles));checks("collect-permits",platforms,[]);await refreshProfile();await refreshCollections();mappingCount();updateButtons();}
+async function init(){if(!token)throw new Error("请先从启动器地址打开基础工作台，再进入本页面。");const response=await fetch("/api/status",{headers:{"X-Radar-Token":token},cache:"no-store"});const s=await response.json();if(!response.ok)throw new Error(s.error);const platforms=Object.fromEntries(Object.entries(s.platforms).map(([k,v])=>[k,`${v.label} (${v.domains.join(",")})`]));checks("collect-platforms",platforms,Object.keys(platforms));checks("collect-roles",s.roles,Object.keys(s.roles));checks("collect-permits",platforms,[]);if(!collectionGuide)collectionGuide=new window.CollectionGuide({api,note,act,chosen,setChecks,platforms:s.platforms,keyConfigured:s.brave_key_configured});await refreshProfile();await refreshCollections();mappingCount();updateButtons();}
 init().catch(error=>note(error.message));

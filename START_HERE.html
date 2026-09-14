@@ -13,6 +13,18 @@ footer{margin-top:30px;color:#536a83}@media(max-width:650px){main{margin:0;paddi
 <p class="notice">这是操作指南，不是正在运行的工作台。本页不会执行命令、读取账户或自动联网。请在文件管理器中运行启动器，并保留终端窗口。</p>
 <h1>零基础操作指南：从下载到第一份真实报告</h1>
 <p>首次目标只有一个：在自己的电脑打开工作台，录入一条有权处理的真实职位描述并下载报告。先不配置任何爬虫账号、搜索密钥或模型。JD 就是招聘方写出的“岗位职责 + 任职要求”。</p>
+<h2>已经打开过工作台：直接更新，不要重装环境</h2>
+<p>已经使用 Anaconda/Python 成功启动的人，跳过第1节。先在旧终端按 Ctrl+C，停止后备份页面显示的完整数据目录（默认用户主目录下 <code>.vibe-job-radar</code>）。然后从 GitHub 的 <strong>main → Code → Download ZIP</strong> 下载并解压新源码；不要继续运行旧解压目录。</p>
+<p>进入新源码目录，沿用你已经成功的解释器。例如在 Git Bash 中使用现有 Anaconda 环境：</p>
+<pre><code>/d/code_environment/anaconda_all_css/py312/python.exe scripts/start_workbench.py</code></pre>
+<p>这是本项目用户已验证可用的解释器路径示例，不要求其他电脑创建同名目录。路径不相同的用户使用自己的 Python；含空格时给解释器完整路径加引号。使用同一工作区即可保留原有数据，不要为了更新删掉数据库。</p>
+<p>打开本次终端给出的完整地址，再点首页的“进入自动采集 / 原文复核 / 附件与量化指标工作台”。不要沿用旧端口书签。看到下面三个入口即表示新的填写指引已经加载：<strong>我有职位链接：套用 URL 入门参数</strong>、<strong>我想先搜索：套用搜索入门参数</strong>、<strong>检查填写 / 预览计划（不采集）</strong>。若看不到，检查运行目录与旧进程，而不是反复安装 Python。</p>
+<h2>已进高级页但不知道怎么填：只选一条路线</h2>
+<div class="scroll"><table><thead><tr><th>你手上已有的东西</th><th>点哪个入口</th><th>第一轮填什么</th><th>不用填什么</th></tr></thead><tbody><tr><td>一条具体职位详情链接</td><td>我有职位链接：套用 URL 入门参数</td><td>1岗位、1平台、真实链接1条、正文预算1、复用24小时；按实际依据确认访问范围</td><td>搜索 Key、JSON 接口、契约、搜索预算</td></tr><tr><td>想让程序帮忙找职位链接</td><td>我想先搜索：套用搜索入门参数</td><td>自己的 Brave Key、1岗位、1平台、搜索预算1、页数1、正文预算0；核对搜索保存范围</td><td>事先整理的职位 URL、JSON 接口、正文许可</td></tr><tr><td>数据供应方给了接口和文档</td><td>授权 JSON 数据源</td><td>公网 HTTPS 接口、契约链接、必要的 Token、允许范围</td><td>不要拿招聘首页或搜索接口代替职位数据源</td></tr><tr><td>只有 JD 文本，没链接也没 Key</td><td>返回基础工作台</td><td>粘贴一条有权处理的完整 JD，保存再分析</td><td>一切搜索/数据源凭据</td></tr></tbody></table></div>
+<p><strong>网址从哪里来：</strong> 自己在招聘网站点进具体职位，Ctrl+L、Ctrl+C 复制地址栏。不是首页、搜索列表、本机 <code>/advanced</code> 或示例职位ID。<strong>Key从哪里来：</strong> 从 <a href="https://api-dashboard.search.brave.com/">Brave 官方控制台</a> 按其现行步骤开通 Search 并创建 API Key，填生成的密钥值，不是账户密码、密钥名称或网址。<strong>接口从哪里来：</strong> 由实际数据提供方给出；没有供应方时忽略该路线。</p>
+<p>点击入门参数后仍需自己填真实输入，按钮不会自动填授权、密钥或职位，也不会自动联网。先点“检查填写 / 预览计划（不采集）”，按字段提示补齐，再由你点“创建并自动执行”。预检不消耗外部 API 请求，也不验证网站可抓、密钥有效或授权成立。没有 Key 仍能预览计划，但不能发起搜索。</p>
+<p>搜索预算1不是只返回1条职位；正文预算0会<strong>故意只得到标题、链接和摘要</strong>，不能据此生成完整正文要求统计。遇到 empty/needs_attention 先查看具体请求与结果，不要马上提高预算。详细的逐格表、真实用途填写参考与错误对照见 <a href="docs/COLLECTION_FORM_CASES.md">采集表单案例</a>。</p>
+<p>恢复历史任务时，已进入正文/报告阶段的搜索任务无需再填 Brave Key。切换到数据源历史任务时先暂停让你填写该数据源 Token；只有提供方明确无需 Token 才可再次点击并确认无 Token 继续。程序不会复用上一种服务的密钥，也不会自动重试已经结束的任务。</p>
 <h2>1. 准备 Python（已有 3.10+ 可跳过）</h2>
 <p>Python 是运行本程序的软件环境。本项目不是独立 EXE；只安装浏览器还不够。当前跨平台 CI 测过 3.10、3.11、3.12，建议首次验证选 3.12。</p>
 <p><strong>Windows：</strong> 从 <a href="https://www.python.org/downloads/">Python 官方下载页</a> 获取 Python Install Manager 并安装。按 Windows 开始菜单，搜索“PowerShell”并打开，在窗口中粘贴下列命令，按回车：</p>

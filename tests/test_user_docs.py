@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
-GUIDES = ['README.md', 'docs/FIRST_RUN.md', 'docs/WORKFLOWS.md', 'docs/ACQUISITION_CAPABILITIES.md']
+GUIDES = ['README.md', 'docs/FIRST_RUN.md', 'docs/WORKFLOWS.md', 'docs/ACQUISITION_CAPABILITIES.md', 'docs/COLLECTION_FORM_CASES.md']
 
 
 class UserDocsTests(unittest.TestCase):
