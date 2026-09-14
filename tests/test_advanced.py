@@ -59,7 +59,7 @@ class EvidenceTests(unittest.TestCase):
         original = self.w.report_file(self.run['id'],'run_manifest.json').read_bytes()
         self.e.save(self.data())
         self.w.add_job(capture(url='https://www.zhipin.com/job_detail/later.html',text='使用 Codex 完成代码审查。'))
-        report = self.e.generate({'run_id':self.run['id'],'expected_revision':1})
+        report=self.e.generate({'run_id':self.run['id'],'expected_revision':1})
         self.assertEqual(report['manifest']['stats']['full_text_job_groups'],1)
         self.assertEqual(self.w.report_file(self.run['id'],'run_manifest.json').read_bytes(),original)
 
@@ -143,7 +143,8 @@ class EvidenceTests(unittest.TestCase):
         row=next(r for r in report['requirements'] if r['requirement_id']==self.row['requirement_id'])
         self.assertEqual(row['review_status'],'rejected')
         self.e.review({**d,'expected_revision':1,'decision':'pending'})
-        self.assertEqual(self.e.state()['reviews'][self.row['requirement_id']]['decision'],'pending')
+        row = next(r for r in self.e.catalogue({'run_id':self.run['id']})['rows'] if r['requirement_id']==self.row['requirement_id'])
+        self.assertEqual(row['saved_review']['decision'],'pending')
 
     def test_snippet_review_never_promotes_to_full_text(self):
         w=Workspace(Path(self.tmp.name)/'snippets');w.add_job(capture(evidence_level='snippet',full_text_confirmed=False));run=w.analyze({});e=EvidenceService(w)
