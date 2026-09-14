@@ -5,10 +5,8 @@ restarts; live sessions/passwords do not. Dependency injection enables offline t
 """
 from __future__ import annotations
 
-import copy
 import hashlib
 import importlib.metadata
-import importlib.util
 import json
 import queue
 import re
@@ -16,7 +14,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -43,7 +40,6 @@ MESSAGES = {
     'ready': '岗位已列出。勾选要研究的岗位，再点击“采集所选并生成报告”。',
     'empty_list': '没有识别到岗位链接。请在采集浏览器完成搜索/登录，再点“读取当前列表”。',
     'manual_required': '需要你操作采集浏览器：完成登录/验证或打开搜索结果，然后回这里读取当前列表。',
-    'login_submitted_confirm_manually': '已尝试提交一次密码表单。请在采集浏览器确认结果、处理验证码；这里不自动宣称登录成功。',
     'manual_browser_open': '已打开平台登录页面。请在采集浏览器完成密码/扫码/验证码登录，然后读取当前列表。',
     'collecting': '正在按强制频次依次打开选中岗位，真实详情链接会自动保留。',
     'completed': '本批次已结束。请查看每条结果和报告；有报告不等于所有岗位均采集成功。',
@@ -203,6 +199,8 @@ class GuidedService:
             raise InputError('未知操作。')
         if action in {'pause','stop'}:
             with self._lock:
+                if self._busy and self._active is None:
+                    raise InputError('浏览器安装正在运行；此任务按钮不能取消安装。')
                 if self._active and self._active != ident:
                     raise InputError('另一个任务正在运行。')
                 self._cancel.set()
@@ -214,6 +212,8 @@ class GuidedService:
                 else:
                     self._submit('close' if action == 'stop' else 'pause_idle', ident)
             return {'id': ident, 'message': MESSAGES['paused' if action=='pause' else 'stopped']}
+        if action == 'resume' and state['status'] in {'completed', 'stopped'}:
+            return {'id': ident, 'message': '该任务已结束；已有报告保留。重新打开搜索请使用搜索按钮。'}
         secret = None
         if action == 'collect':
             ids = data.get('selected')

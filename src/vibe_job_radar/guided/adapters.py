@@ -131,7 +131,7 @@ class Registry:
     def describe(self) -> list[dict]:
         return [{'key': a.key, 'label': a.label, 'version': getattr(a, 'version', 'custom'),
                  'certification': getattr(a, 'certification', 'not_live_verified'),
-                 'login': 'one_attempt_if_password_form_else_manual'} for a in self._adapters.values()]
+                 'login': 'manual_in_platform_browser'} for a in self._adapters.values()]
 
 
 def builtins() -> Registry:

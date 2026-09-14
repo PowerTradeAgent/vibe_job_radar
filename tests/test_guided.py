@@ -211,7 +211,7 @@ class ServiceTests(unittest.TestCase):
         ident=self.create();secret='UNIT-TEST-PASSWORD-XYZ'
         with self.assertRaises(InputError):
             self.service.action({'id':ident,'action':'login','username':'test-user','password':secret})
-        for p in self.workspace.root.rglob('*.json'):self.assertNotIn(secret,p.read_text())
+        for p in self.workspace.root.rglob('*.json'):self.assertNotIn(secret,p.read_text(encoding='utf-8'))
         self.assertNotIn(secret,json.dumps(self.service.state()))
         self.service.action({'id':ident,'action':'login'});self.wait()
         self.assertEqual(self.job(ident)['authentication'],'manual_pending')
@@ -238,6 +238,20 @@ class ServiceTests(unittest.TestCase):
     def test_stop_closes_backend_and_preserves_records(self):
         ident=self.create();self.service.action({'id':ident,'action':'stop'});self.wait()
         self.assertEqual(self.job(ident)['status'],'stopped');self.assertFalse(self.service.state()['jobs'][0]['browser_open'])
+    def test_completed_resume_is_noop_not_a_new_search(self):
+        ident=self.create(); job=self.job(ident)
+        self.service._save(job,'completed',status='completed',phase='report')
+        before=list(FakeBackend.instances[-1].opens)
+        self.service.action({'id':ident,'action':'resume'})
+        self.assertFalse(self.service.state()['busy'])
+        self.assertEqual(FakeBackend.instances[-1].opens,before)
+    def test_task_controls_do_not_cancel_dependency_install(self):
+        ident=self.create()
+        self.service._busy=True; self.service._active=None
+        try:
+            with self.assertRaises(InputError): self.service.action({'id':ident,'action':'stop'})
+            self.assertIsNone(self.service._stop_ident)
+        finally: self.service._busy=False
     def test_second_task_cannot_be_created_while_busy(self):
         with self.service._lock:self.service._busy=True
         try:
