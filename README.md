@@ -64,4 +64,8 @@ python scripts/run_guided_browser.py
 
 安装CLI是可选项：`python -m pip install -e .`。Playwright只在启用浏览器功能时需要，可在向导里安装。自动测试使用人工职位与模拟上游，不能替代真实招聘网站认证；以对应提交的CI为准。
 
-旧CLI文档完整保留在 [README_CLI.md](README_CLI.md)。服务仅监听本机，不适用于公网多人部署。升级新增的 `browser_fetch` 来源不保证旧版本认识，回退时恢复相应完整工作区备份。
+旧CLI文档完整保留在 [README_CLI.md](README_CLI.md)。服务仅监听本机，不适用于公网多人部署。升级新增的 `browser_fetch` 来源不保证旧版本认识，回退时恢复对应的完整工作区备份。
+
+### 已装Playwright仍提示浏览器未就绪？
+
+先读[浏览器安装与启动修复](docs/BROWSER_SETUP.md)。`pip install Chromium`装的是同名Python包；浏览器本体要通过当前Python的`-m playwright install chromium`下载。新手页可点“检查浏览器（不采集）”，区分包、可执行文件与真实空白页启动；安装失败阶段和脱敏输出直接可见。

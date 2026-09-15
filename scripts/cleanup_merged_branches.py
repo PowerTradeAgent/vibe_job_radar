@@ -1,6 +1,6 @@
-"""One-shot, user-approved issue #16 branch cleanup. Default is validation-only.
+"""One-shot, user-approved issue #19 branch cleanup. Default is validation-only.
 
-Only the recorded guided-acquisition branch qualifies. All heads must be retained by main.
+Only the recorded browser-readiness branch qualifies. All heads must be retained by main.
 Atomic Git deletion with exact leases rejects concurrently moved branches.
 This is repository maintenance, never part of the installed application.
 """
@@ -14,10 +14,10 @@ import subprocess
 from pathlib import Path
 
 REPOSITORY = 'saksim/vibe_job_radar'
-BASE = 'ead51d9c1371db770f91ab43b56848ba439f2b8d'
-ACTIVE = 'feat/guided-browser-acquisition'
+BASE = '800fb08985690b32ababfb9f14703c72acf5827b'
+ACTIVE = 'fix/browser-readiness-diagnostics'
 PRIOR_HEADS = {}
-TITLE = 'Merge approved guided acquisition and clean branches (issue 16)'
+TITLE = 'Merge approved browser readiness fix and clean branches (issue 19)'
 
 
 def git(args, env):

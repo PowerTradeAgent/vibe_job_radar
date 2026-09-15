@@ -13,7 +13,7 @@ authors = [{name = "WEIYU AI Studio"}]
 dependencies = []
 
 [project.optional-dependencies]
-browser = ["playwright>=1.48,<2"]
+browser = ["playwright>=1.48,<2", "packaging>=24.2"]
 
 [project.scripts]
 vibe-radar = "vibe_job_radar.cli:main"

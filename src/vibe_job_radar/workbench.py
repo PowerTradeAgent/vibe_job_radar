@@ -166,7 +166,7 @@ class Handler(BaseHTTPRequestHandler):
         target = self.server.workspace
         if route.startswith("/api/guided/"):
             target = self.server.guided
-            methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "diagnose", "export")}
+            methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export")}
         elif route.startswith("/api/evidence/"):
             target = self.server.evidence
             methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "review", "upload", "metric", "save", "remove", "generate")}
