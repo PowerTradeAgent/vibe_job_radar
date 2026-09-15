@@ -1,0 +1,29 @@
+name: live-public-example
+on:
+  pull_request:
+    paths:
+      - 'src/vibe_job_radar/public_example.py'
+      - 'src/vibe_job_radar/network.py'
+      - 'src/vibe_job_radar/redirect_policy.py'
+      - 'scripts/check_live_public_example.py'
+      - '.github/workflows/live-public-example.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: One actual public Greenhouse GET, no Key, no browser
+        run: python scripts/check_live_public_example.py --live
+      - name: Save only metadata and counts, not third-party full text
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-public-example
+          path: live-evidence/
