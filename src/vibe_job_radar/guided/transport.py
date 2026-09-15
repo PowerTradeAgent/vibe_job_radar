@@ -77,7 +77,10 @@ class PinnedTransport:
         self.reserve('request')
         if body and len(body) > 1_000_000:
             raise CrawlError('request_too_large')
-        conn = PinnedHTTPSConnection(host, ip, 20)
+        try:
+            conn = PinnedHTTPSConnection(host, ip, 20)
+        except FetchError as exc:
+            raise CrawlError(exc.code) from exc
         hdr = {k: v for k, v in (headers or {}).items()
                if k.lower() not in {'host', 'connection', 'content-length', 'accept-encoding',
                                     'proxy-authorization', 'proxy-connection', 'transfer-encoding'}}
@@ -100,6 +103,8 @@ class PinnedTransport:
                 raise CrawlError('unexpected_compression')
             return WireResponse(response.status, metadata, content,
                                 tuple(v for k, v in pairs if k.lower() == 'set-cookie'))
+        except FetchError as exc:
+            raise CrawlError(exc.code) from exc
         except ssl.SSLCertVerificationError as exc:
             raise CrawlError('tls_verification_failed') from exc
         except ssl.SSLError as exc:

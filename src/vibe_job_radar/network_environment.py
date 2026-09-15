@@ -63,11 +63,26 @@ def inspect_environment(host: str = 'www.zhipin.com', *, discover=None) -> dict:
     else:
         message = ('没有发现适用于HTTPS的静态代理配置。此结果不能证明未使用TUN/VPN；'
                    'TUN/VPN系统路由和PAC动态代理不由此检查认证。')
+    from .loopback_proxy import LoopbackProxy, LocalProxyError
+    try:
+        selected = LoopbackProxy.from_environment()
+        explicit = {'enabled': selected is not None, 'valid': True,
+                    'host': selected.host if selected else None,
+                    'port': selected.port if selected else None,
+                    'target_dns': 'local_public_only', 'connectivity_tested': False}
+    except LocalProxyError as exc:
+        explicit = {'enabled': False, 'valid': False, 'error': exc.code,
+                    'connectivity_tested': False}
+    if explicit['enabled']:
+        message += ' 已明确配置本程序专用的本机HTTP代理；最终目标仍须通过公网DNS检查，未在本次诊断中测试连接。'
+    elif not explicit['valid']:
+        message += ' 本程序专用代理配置无效，实际请求会报错而非静默直连。'
     return {'schema_version': 1, 'python': sys.executable, 'os': platform.system(),
             'host_for_config_check': host, 'proxy_configuration_detected': found,
             'configuration_read_error_type': error, 'proxy_candidates': endpoints,
             'https_candidate_key': relevant, 'standard_no_proxy_match': bypassed,
             'collector_applies_static_proxy': False,
+            'explicit_loopback_proxy': explicit,
             'tun_or_vpn_detected': None, 'virtual_machine_detected': None,
             'vm_note': '虚拟机的127.0.0.1是该虚拟机本身；诊断不猜宿主机地址、不扫描网关。',
             'message': message,

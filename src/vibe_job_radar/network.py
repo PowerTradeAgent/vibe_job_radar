@@ -1,4 +1,4 @@
-"""Small synchronous HTTPS transport: public IP pinning, verified TLS, no redirects/proxies.
+"""Small synchronous HTTPS transport: public IP pinning, verified TLS and opt-in loopback proxy.
 
 Site fetching is opt-in and additionally robots-gated. API calls use documented
 endpoints and explicit credentials, not the site-fetch path.
@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 from .utils import domain_matches
+from .loopback_proxy import LoopbackProxy, LocalProxyError
 
 USER_AGENT = "VibeJobRadar/0.1"
 
@@ -54,8 +55,8 @@ class Response:
 def _connection_candidates(ips: str | tuple[str, ...]) -> tuple[str, ...]:
     """Interleave families from one validated DNS snapshot; never resolve again.
 
-    This is direct/system-routed connectivity only. It does not add a proxy,
-    encrypted DNS, a private-address exception, or a different trust policy.
+    The destination snapshot is identical for system routing or an explicit
+    loopback proxy. No remote DNS or private-destination exception is allowed.
     """
     supplied = (ips,) if isinstance(ips, str) else tuple(ips)
     if not supplied:
@@ -92,6 +93,11 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
         if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("a finite positive connection timeout is required")
         self._pinned_ips = _connection_candidates(ip)
+        try:
+            self._local_proxy = LoopbackProxy.from_environment()
+        except LocalProxyError as exc:
+            raise FetchError(exc.code) from exc
+        self.network_mode = 'loopback_http_proxy' if self._local_proxy else 'system_route'
         self.connection_attempts: list[dict] = []
         self.connected_ip: str | None = None
         super().__init__(host, port=443, timeout=timeout, context=ssl.create_default_context())
@@ -110,11 +116,14 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
             candidates_left = len(self._pinned_ips) - index
             attempt_budget = remaining / candidates_left
             attempt_deadline = time.monotonic() + attempt_budget
-            record = {"ip": ip, "phase": "tcp", "outcome": "pending"}
+            record = {"ip": ip, "phase": "proxy_connect" if self._local_proxy else "tcp", "outcome": "pending"}
             self.connection_attempts.append(record)
             sock = None
             try:
-                sock = socket.create_connection((ip, 443), attempt_budget, self.source_address)
+                if self._local_proxy:
+                    sock = self._local_proxy.open_tunnel(ip, attempt_budget, self.source_address)
+                else:
+                    sock = socket.create_connection((ip, 443), attempt_budget, self.source_address)
                 remaining = min(deadline, attempt_deadline) - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("connection attempt deadline exceeded")
@@ -130,6 +139,12 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
                 self.connected_ip = ip
                 record["outcome"] = "connected"
                 return
+            except LocalProxyError as exc:
+                record.update(outcome='proxy_failed', error_type=type(exc).__name__)
+                if sock is not None:
+                    sock.close()
+                # A selected proxy never falls back to a direct TCP connection.
+                raise FetchError(exc.code) from exc
             except ssl.SSLError as exc:
                 # Invalid certificates and protocol failures are NOT retried.
                 # Never turn a TLS security failure into a different route.
