@@ -73,7 +73,7 @@ def supported_version(value: str | None) -> bool:
     from packaging.specifiers import SpecifierSet
     from packaging.version import InvalidVersion, Version
     try:
-        return SpecifierSet(PLAYWRIGHT_REQUIREMENT.removeprefix('playwright')).contains(Version(value))
+        return SpecifierSet(PLAYWRIGHT_REQUIREMENT.removeprefix('playwright')).contains(Version(value), prereleases=False)
     except InvalidVersion:
         return False
 
