@@ -8,6 +8,7 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import socket
+import ssl
 import threading
 import time
 from dataclasses import dataclass, field
@@ -68,7 +69,7 @@ class PinnedTransport:
 
     def fetch(self, url: str, method='GET', headers=None, body=None, *, required=True) -> WireResponse:
         try:
-            host, ip, target = validate_public_url(url, self.domains)
+            host, ip, target = validate_public_url(url, self.domains, all_addresses=True)
         except FetchError as exc:
             raise CrawlError(exc.code) from exc
         if host in self.blocked:
@@ -76,7 +77,10 @@ class PinnedTransport:
         self.reserve('request')
         if body and len(body) > 1_000_000:
             raise CrawlError('request_too_large')
-        conn = PinnedHTTPSConnection(host, ip, 20)
+        try:
+            conn = PinnedHTTPSConnection(host, ip, 20)
+        except FetchError as exc:
+            raise CrawlError(exc.code) from exc
         hdr = {k: v for k, v in (headers or {}).items()
                if k.lower() not in {'host', 'connection', 'content-length', 'accept-encoding',
                                     'proxy-authorization', 'proxy-connection', 'transfer-encoding'}}
@@ -99,6 +103,12 @@ class PinnedTransport:
                 raise CrawlError('unexpected_compression')
             return WireResponse(response.status, metadata, content,
                                 tuple(v for k, v in pairs if k.lower() == 'set-cookie'))
+        except FetchError as exc:
+            raise CrawlError(exc.code) from exc
+        except ssl.SSLCertVerificationError as exc:
+            raise CrawlError('tls_verification_failed') from exc
+        except ssl.SSLError as exc:
+            raise CrawlError('tls_handshake_failed') from exc
         except (OSError, http.client.HTTPException) as exc:
             raise CrawlError('network_error') from exc
         finally:

@@ -79,6 +79,12 @@ MESSAGES = {
 }
 
 MESSAGES.update(HEALTH_MESSAGES)
+MESSAGES.update({
+    'local_proxy_configuration_invalid': '本机HTTP代理配置不符合要求。仅接受明确的 http://127.0.0.1:端口 或 http://[::1]:端口；本版本不接受账号、远程代理或SOCKS。',
+    'local_proxy_connection_failed': '已选择本机代理，但代理连接或CONNECT隧道失败。程序没有改走直连；请核对实际HTTP代理端口及代理是否运行。',
+    'tls_verification_failed': 'TLS证书验证失败，已停止。检查系统时间、证书与网络环境，不要关闭TLS校验。',
+    'tls_handshake_failed': 'TLS握手失败，已停止；这不是缺少招聘账号或浏览器安装问题。',
+})
 
 
 class GuidedService:

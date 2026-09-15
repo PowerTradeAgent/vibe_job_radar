@@ -1,4 +1,4 @@
-"""Small synchronous HTTPS transport: public IP pinning, verified TLS, no redirects/proxies.
+"""Small synchronous HTTPS transport: public IP pinning, verified TLS and opt-in loopback proxy.
 
 Site fetching is opt-in and additionally robots-gated. API calls use documented
 endpoints and explicit credentials, not the site-fetch path.
@@ -8,6 +8,8 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import json
+import math
+import errno
 import socket
 import ssl
 import time
@@ -15,6 +17,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 from .utils import domain_matches
+from .loopback_proxy import LoopbackProxy, LocalProxyError
 
 USER_AGENT = "VibeJobRadar/0.1"
 
@@ -49,22 +52,120 @@ class Response:
         raise FetchError("encoding_unknown", "save and review the page manually")
 
 
+def _connection_candidates(ips: str | tuple[str, ...]) -> tuple[str, ...]:
+    """Interleave families from one validated DNS snapshot; never resolve again.
+
+    The destination snapshot is identical for system routing or an explicit
+    loopback proxy. No remote DNS or private-destination exception is allowed.
+    """
+    supplied = (ips,) if isinstance(ips, str) else tuple(ips)
+    if not supplied:
+        raise FetchError("non_public_address")
+    families: dict[int, list[str]] = {4: [], 6: []}
+    order: list[int] = []
+    for value in supplied:
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise FetchError("non_public_address") from exc
+        if not address.is_global or "%" in value:
+            raise FetchError("non_public_address")
+        family = address.version
+        if family not in order:
+            order.append(family)
+        normal = str(address)
+        if normal not in families[family]:
+            families[family].append(normal)
+    result: list[str] = []
+    # Four bounded TCP/TLS attempts, preserving order within each family.
+    # All supplied addresses have been validated BEFORE limiting the candidates.
+    for index in range(max(map(len, families.values()))):
+        for family in order:
+            if index < len(families[family]):
+                result.append(families[family][index])
+                if len(result) == 4:
+                    return tuple(result)
+    return tuple(result)
+
+
 class PinnedHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, host: str, ip: str, timeout: float):
+    def __init__(self, host: str, ip: str | tuple[str, ...], timeout: float):
+        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("a finite positive connection timeout is required")
+        self._pinned_ips = _connection_candidates(ip)
+        try:
+            self._local_proxy = LoopbackProxy.from_environment()
+        except LocalProxyError as exc:
+            raise FetchError(exc.code) from exc
+        self.network_mode = 'loopback_http_proxy' if self._local_proxy else 'system_route'
+        self.connection_attempts: list[dict] = []
+        self.connected_ip: str | None = None
         super().__init__(host, port=443, timeout=timeout, context=ssl.create_default_context())
-        self._pinned_ip = ip
 
     def connect(self) -> None:
-        # DNS is resolved/validated once by SafeHTTP. TLS still validates the original hostname.
-        sock = socket.create_connection((self._pinned_ip, 443), self.timeout, self.source_address)
-        try:
-            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
-        except Exception:
-            sock.close()
-            raise
+        # HTTP bytes are not sent until this method returns. Only pre-request
+        # TCP errors/timeouts may advance to the next already-validated IP.
+        deadline = time.monotonic() + self.timeout
+        self.connection_attempts = []
+        self.connected_ip = None
+        last_error: OSError | None = None
+        for index, ip in enumerate(self._pinned_ips):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            candidates_left = len(self._pinned_ips) - index
+            attempt_budget = remaining / candidates_left
+            attempt_deadline = time.monotonic() + attempt_budget
+            record = {"ip": ip, "phase": "proxy_connect" if self._local_proxy else "tcp", "outcome": "pending"}
+            self.connection_attempts.append(record)
+            sock = None
+            try:
+                if self._local_proxy:
+                    sock = self._local_proxy.open_tunnel(ip, attempt_budget, self.source_address)
+                else:
+                    sock = socket.create_connection((ip, 443), attempt_budget, self.source_address)
+                remaining = min(deadline, attempt_deadline) - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("connection attempt deadline exceeded")
+                sock.settimeout(remaining)
+                record["phase"] = "tls"
+                # Keep the original hostname for SNI and certificate validation.
+                secured = self._context.wrap_socket(sock, server_hostname=self.host)
+                sock = secured
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("connection deadline exceeded")
+                secured.settimeout(self.timeout)
+                self.sock = secured
+                self.connected_ip = ip
+                record["outcome"] = "connected"
+                return
+            except LocalProxyError as exc:
+                record.update(outcome='proxy_failed', error_type=type(exc).__name__)
+                if sock is not None:
+                    sock.close()
+                # A selected proxy never falls back to a direct TCP connection.
+                raise FetchError(exc.code) from exc
+            except ssl.SSLError as exc:
+                # Invalid certificates and protocol failures are NOT retried.
+                # Never turn a TLS security failure into a different route.
+                record.update(outcome="tls_rejected", error_type=type(exc).__name__)
+                if sock is not None:
+                    sock.close()
+                raise
+            except OSError as exc:
+                record.update(outcome="connect_failed", error_type=type(exc).__name__)
+                if sock is not None:
+                    sock.close()
+                if exc.errno in (errno.EACCES, errno.EPERM):
+                    raise
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+        raise TimeoutError("connection deadline exceeded")
 
 
-def validate_public_url(url: str, allowed_domains: set[str]) -> tuple[str, str, str]:
+def validate_public_url(url: str, allowed_domains: set[str], *, all_addresses: bool = False
+                        ) -> tuple[str, str | tuple[str, ...], str]:
     p = urlsplit(url)
     if p.scheme != "https" or not p.hostname or p.username or p.password or p.fragment:
         raise FetchError("unsafe_url", "only credential-free HTTPS URLs without fragments are fetched")
@@ -81,7 +182,7 @@ def validate_public_url(url: str, allowed_domains: set[str]) -> tuple[str, str, 
     except (socket.gaierror, ValueError) as exc:
         raise FetchError("dns_error", type(exc).__name__) from exc
     target = urlunsplit(("", "", p.path or "/", p.query, ""))
-    return host, ips[0], target
+    return host, tuple(ips) if all_addresses else ips[0], target
 
 
 class SafeHTTP:
@@ -96,7 +197,7 @@ class SafeHTTP:
 
     def request(self, url: str, *, method: str = "GET", headers: dict | None = None,
                 body: bytes | None = None, return_redirect: bool = False) -> Response:
-        host, ip, target = validate_public_url(url, self.allowed_domains)
+        host, ip, target = validate_public_url(url, self.allowed_domains, all_addresses=True)
         if host in self.blocked_hosts:
             raise FetchError("host_circuit_open", host)
         wait = self.interval - (time.monotonic() - self.last_request.get(host, 0))
@@ -126,6 +227,10 @@ class SafeHTTP:
             return Response(resp.status, response_headers, data, url)
         except FetchError:
             raise
+        except ssl.SSLCertVerificationError as exc:
+            raise FetchError("tls_verification_failed", type(exc).__name__) from exc
+        except ssl.SSLError as exc:
+            raise FetchError("tls_handshake_failed", type(exc).__name__) from exc
         except (OSError, http.client.HTTPException) as exc:
             raise FetchError("network_error", type(exc).__name__) from exc
         finally:
