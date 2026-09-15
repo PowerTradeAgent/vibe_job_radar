@@ -1,8 +1,12 @@
 name: browser-installation-health
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
@@ -45,5 +49,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: browser-health-${{ matrix.label }}
           path: browser-acceptance/browser-health/

@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+**0.2.1 维护候选：新增精确源码绑定的本地验收和候选构建。未增加网络兼容，不等于主需求已完成。** 见[本次版本说明](docs/RELEASE_0_2_1.md)与[全部开放需求分类](docs/OPEN_ISSUES_0_2_1.md)。本PR合并前，以下新脚本应从PR分支获取，不在旧main。
+
 **先拿到真实数据：** 运行 `scripts/run_real_example.py`，输入 y，即可从官方公开接口取得一条 Anthropic 架构师岗位并打开本地报告。无需URL、Key、账号或浏览器组件；这不是BOSS数据或合成演示。详见[第一份真实结果](docs/FIRST_REAL_RESULT.md)。
 
 **0.2.0 新手入口：在首页点击“新手推荐：选平台 → 找岗位 → 勾选采集”，无需先整理职位 URL。** 详见[按按钮操作指南](docs/GUIDED_COLLECTION.md)。新增可选真实浏览器后端，平台原生页面人工登录后继续自动采集；三站页面配置尚未实站认证。原高级表单和本地分析继续保留。
@@ -26,7 +28,7 @@
 
 ## 不需要浏览器采集，也能使用
 
-本地粘贴、导入和规则分析不需要任何 Key 或额外运行依赖。先点击“运行合成演示”认识报告，再粘贴你有权处理的真实完整 JD，保存并分析。下载 `requirements_zh.csv` 核对逐条原文。
+本地粘贴、导入和规则分析不需要任何 Key 或额外运行依赖。本地手工文本可以保存、提取并生成报告。下载 `requirements_zh.csv` 核对逐条原文。
 
 原 `/advanced` 保留 URL、Brave Search API 和授权 JSON 数据源路线。已有链接走 URL；想用搜索服务找链接，需要自己的 Brave Key；没有数据供应方就不选 JSON 接口。见 [逐格填写案例](docs/COLLECTION_FORM_CASES.md)。旧 HTTP 路线不共享新向导的浏览器会话。
 
@@ -71,3 +73,12 @@ python scripts/run_guided_browser.py
 ### 已装Playwright仍提示浏览器未就绪？
 
 先读[浏览器安装与启动修复](docs/BROWSER_SETUP.md)。`pip install Chromium`装的是同名Python包；浏览器本体要通过当前Python的`-m playwright install chromium`下载。新手页可点“检查浏览器（不采集）”，区分包、可执行文件与真实空白页启动；安装失败阶段和脱敏输出直接可见。
+
+## 维护者：先验收，再打包
+
+```bash
+python scripts/verify_candidate.py
+python scripts/build_candidate.py
+```
+
+缺少成功报告或代码变更后沿用旧结果，构建会拒绝。结果只证明本地检查，不能替代远端CI、用户网络和招聘站点认证。原个人工作区与采集行为未改变。

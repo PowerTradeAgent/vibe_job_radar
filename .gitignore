@@ -136,3 +136,7 @@ dist_native/
 # Browser state is local-only; never version login sessions.
 playwright/.auth/
 .browser-state/
+
+# Local release evidence is not application source.
+/release-verification/
+/release-candidate/
