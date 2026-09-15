@@ -14,7 +14,7 @@ def build(out: Path) -> Path:
     version=re.search(r'^__version__ = "([^"]+)"', (ROOT/'src/vibe_job_radar/_version.py').read_text(encoding='utf-8'), re.M).group(1)
     out.mkdir(parents=True,exist_ok=True)
     archive=out/f'vibe-job-radar-{version}-source.zip'
-    tops={'README.md','README_CLI.md','START_HERE.html','LICENSE','pyproject.toml','start_windows.bat','start_macos.command','.gitattributes','.gitignore','.env.example'}
+    tops={'README.md','README_CLI.md','START_HERE.html','LICENSE','pyproject.toml','start_windows.bat','get_real_example_windows.bat','start_macos.command','.gitattributes','.gitignore','.env.example'}
     prefixes={'src','scripts','tests','docs','examples','demo_output','.github'}
     hashes={}
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:

@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+**先拿到真实数据：** 运行 `scripts/run_real_example.py`，输入 y，即可从官方公开接口取得一条 Anthropic 架构师岗位并打开本地报告。无需URL、Key、账号或浏览器组件；这不是BOSS数据或合成演示。详见[第一份真实结果](docs/FIRST_REAL_RESULT.md)。
+
 **0.2.0 新手入口：在首页点击“新手推荐：选平台 → 找岗位 → 勾选采集”，无需先整理职位 URL。** 详见[按按钮操作指南](docs/GUIDED_COLLECTION.md)。新增可选真实浏览器后端，平台原生页面人工登录后继续自动采集；三站页面配置尚未实站认证。原高级表单和本地分析继续保留。
 
 **当前代码与说明统一从 main 获取。** 0.2.0 为源码版本，尚未创建正式 GitHub Release/tag；不是包含 Python 和 Chromium 的免安装 EXE。

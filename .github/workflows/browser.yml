@@ -26,6 +26,7 @@ jobs:
           python scripts/run_resume_browser.py
           python scripts/run_guided_browser.py
           python scripts/run_guided_review_browser.py
+          python scripts/run_recovery_browser.py
       - name: Save browser evidence
         if: always()
         uses: actions/upload-artifact@v4
