@@ -35,6 +35,14 @@ from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_r
 from .browser_install import install_commands, run_command
 
 MESSAGES = {
+    'local_proxy_configuration_conflict': '同时配置了HTTP与SOCKS入口。请只保留一种，本程序不会猜测或在失败后自动改走另一条线路。',
+    'local_socks_configuration_invalid': 'SOCKS设置无效：仅支持明确的本机socks5入口和实际端口；不支持认证、socks5h或宿主机LAN地址。',
+    'local_socks_auth_unsupported': '该SOCKS服务要求认证或没有接受匿名方式；本阶段不支持认证。请勿填招聘账号，也不会自动直连。',
+    'local_socks_request_rejected': '本机SOCKS服务拒绝连接目标。核对代理规则，程序不会换地址或直连继续请求。',
+    'local_socks_protocol_error': 'SOCKS响应格式不兼容。检查是否误填HTTP端口或SOCKS4端口，本阶段要求SOCKS5。',
+    'local_socks_truncated_reply': 'SOCKS握手尚未完成连接就断开。不是职位URL或网站登录问题。',
+    'local_socks_timeout': '连接本机SOCKS或握手超时。检查实际端口与服务状态，不增加职位预算。',
+    'local_socks_connection_failed': '无法连接所选本机SOCKS端口；服务可能未开启。程序不会自动直连。',
     'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
     'list_page_limit': '本任务列表页数已达到上限。新任务仍受站点共享配额限制。',
     'operation_error': '操作未完成，已有结果保留。请检查环境与页面。',

@@ -64,17 +64,19 @@ def inspect_environment(host: str = 'www.zhipin.com', *, discover=None) -> dict:
         message = ('没有发现适用于HTTPS的静态代理配置。此结果不能证明未使用TUN/VPN；'
                    'TUN/VPN系统路由和PAC动态代理不由此检查认证。')
     from .loopback_proxy import LoopbackProxy, LocalProxyError
+    from .loopback_socks import LoopbackSocks5, select_loopback_proxy
     try:
-        selected = LoopbackProxy.from_environment()
+        selected = select_loopback_proxy()
         explicit = {'enabled': selected is not None, 'valid': True,
                     'host': selected.host if selected else None,
                     'port': selected.port if selected else None,
-                    'target_dns': 'local_public_only', 'connectivity_tested': False}
+                    'target_dns': 'local_public_only', 'connectivity_tested': False,
+                    'protocol': 'socks5' if isinstance(selected, LoopbackSocks5) else 'http' if selected else None}
     except LocalProxyError as exc:
         explicit = {'enabled': False, 'valid': False, 'error': exc.code,
                     'connectivity_tested': False}
     if explicit['enabled']:
-        message += ' 已明确配置本程序专用的本机HTTP代理；最终目标仍须通过公网DNS检查，未在本次诊断中测试连接。'
+        message += ' 已明确配置本程序专用的本机代理；最终目标仍须通过公网DNS检查，未在本次诊断中测试连接。'
     elif not explicit['valid']:
         message += ' 本程序专用代理配置无效，实际请求会报错而非静默直连。'
     return {'schema_version': 1, 'python': sys.executable, 'os': platform.system(),

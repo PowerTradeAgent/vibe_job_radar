@@ -18,6 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 from .utils import domain_matches
 from .loopback_proxy import LoopbackProxy, LocalProxyError
+from .loopback_socks import LoopbackSocks5, select_loopback_proxy
 
 USER_AGENT = "VibeJobRadar/0.1"
 
@@ -94,10 +95,11 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
             raise ValueError("a finite positive connection timeout is required")
         self._pinned_ips = _connection_candidates(ip)
         try:
-            self._local_proxy = LoopbackProxy.from_environment()
+            self._local_proxy = select_loopback_proxy()
         except LocalProxyError as exc:
             raise FetchError(exc.code) from exc
-        self.network_mode = 'loopback_http_proxy' if self._local_proxy else 'system_route'
+        self.network_mode = ('loopback_socks5_proxy' if isinstance(self._local_proxy, LoopbackSocks5)
+                             else 'loopback_http_proxy' if self._local_proxy else 'system_route')
         self.connection_attempts: list[dict] = []
         self.connected_ip: str | None = None
         super().__init__(host, port=443, timeout=timeout, context=ssl.create_default_context())
