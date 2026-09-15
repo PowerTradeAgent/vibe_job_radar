@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import uuid
 from dataclasses import asdict
 from contextlib import contextmanager
@@ -143,7 +144,8 @@ class Collector:
                 "detail_outcomes": {k: sum(d["status"] == k for d in details) for k in sorted({d["status"] for d in details})},
                 "feed_records": sum(f.get("platforms", {}).get(platform, 0) for f in state["feed_outcomes"]),
                 "platform_connector_certified": False}
-        return {**state, "platform_summary": summary,
+        from .collection_recovery import explain
+        return {**state, **explain(state), "platform_summary": summary,
                 "note": "执行完成不等于全市场完整；公开抓取受许可/robots/页面结构限制，授权数据源由用户提供契约。"}
 
     def list(self, data=None):
@@ -315,22 +317,26 @@ class Collector:
         state["detail_attempts"] += 1
         state["in_flight"] = {"queue": "details", "index": state["details"].index(row)}
         self._save(state)
-        domains = {d for p in state["permit_platforms"] for d in self.workspace.config["platforms"][p]["domains"]}
-        client = self.clients.setdefault(state["id"], SiteFetcher(domains))
+        domains = set(self.workspace.config["platforms"][row["platform"]]["domains"])
+        client = self.clients.setdefault((state["id"], row["platform"]), SiteFetcher(domains))
         try:
             response = client.fetch(row["url"])
             markup = response.text()
-            parsed = parse_job_html(markup, source_url=row["url"])
-            record = JobRecord(**parsed, url=row["url"], platform=row["platform"], source_mode="public_fetch",
+            final_url = safe_url(response.url or row["url"])
+            parsed = parse_job_html(markup, source_url=final_url)
+            record = JobRecord(**parsed, url=final_url, platform=row["platform"], source_mode="public_fetch",
                 rights_note=state["rights_note"], source_ref=f'collection:{state["id"]}', raw_sha256=hashlib.sha256(markup.encode()).hexdigest())
             with Store(self.workspace.db) as store:
                 store.add(record)
-            row.update(status="ok", record_id=record.record_id)
+            row.update(status="ok", record_id=record.record_id, final_url=record.url)
         except (FetchError, ValueError, TypeError) as exc:
             row["status"] = exc.code if isinstance(exc, FetchError) else "parse_error"
-            if row["status"] in {"http_401", "http_403", "http_429", "login_or_challenge", "host_circuit_open"}:
+            if row["status"] in {"http_401", "http_403", "http_429", "login_or_challenge", "host_circuit_open", "redirect_login_required", "redirect_verification_required"}:
                 state["blocked_hosts"].append(host)
         finally:
+            diagnostic = getattr(client, "last_diagnostic", None)
+            if isinstance(diagnostic, dict):
+                row["fetch_diagnostic"] = diagnostic
             state.pop("in_flight", None)
 
     def _feed(self, state, key):
@@ -412,9 +418,25 @@ class Collector:
             if self.workspace.db.is_file():
                 from .pipeline import analyze
                 ident = uuid.uuid4().hex
-                analyze(self.workspace.db, self.workspace.root / "reports" / ident, config=self.workspace.config,
-                        role_filter=state["roles"], platform_filter=state["platforms"])
-                state["report_id"] = ident
+                if state["mode"] == "urls":
+                    ids = {d["record_id"] for d in state["details"] if d["status"] in {"ok", "fresh_reused"}}
+                    # Empty Store creation must not generate a misleading report;
+                    # unrelated historical jobs are not results of this URL batch.
+                    if ids:
+                        with Store(self.workspace.db) as store:
+                            records = [j for j in store.records(latest_only=False) if j.record_id in ids]
+                        with tempfile.TemporaryDirectory(prefix=".url-batch-", dir=self.root) as tmp:
+                            db = Path(tmp)/"batch.sqlite"
+                            with Store(db) as batch:
+                                for job in records:
+                                    batch.add(job)
+                            analyze(db, self.workspace.root / "reports" / ident, config=self.workspace.config,
+                                    role_filter=state["roles"], platform_filter=state["platforms"])
+                        state["report_id"] = ident
+                else:
+                    analyze(self.workspace.db, self.workspace.root / "reports" / ident, config=self.workspace.config,
+                            role_filter=state["roles"], platform_filter=state["platforms"])
+                    state["report_id"] = ident
             problems = any(d["status"] not in {"ok", "fresh_reused"} for d in state["details"]) or any(
                 t["status"] in {"error", "provider_stopped", "budget_skipped", "interrupted_uncertain"} for t in state["tasks"]) or any(
                 f["status"] != "ok" for f in state["feed_outcomes"]) or bool(state["warnings"])

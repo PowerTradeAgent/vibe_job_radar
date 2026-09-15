@@ -31,6 +31,8 @@ API_CONTRACT = 'https://docs.greenhouse.io/job-board.html'
 
 def parse_public_job(payload: dict) -> JobRecord:
     """Validate publisher identity, exact vacancy and full content before storage."""
+    if not isinstance(payload, dict):
+        raise FetchError('example_invalid_shape')
     if payload.get('id') != JOB_ID or payload.get('absolute_url') != SOURCE_URL:
         raise FetchError('example_source_changed')
     title, content = payload.get('title'), payload.get('content')
@@ -38,6 +40,7 @@ def parse_public_job(payload: dict) -> JobRecord:
         raise FetchError('example_title_changed')
     if not isinstance(content, str) or not 100 <= len(content) <= 300000:
         raise FetchError('example_content_missing')
+    # Job Board API may HTML-entity-encode its content; do not rewrite/translate it.
     markup = content
     for _ in range(2):
         if '&lt;' in markup and '<p' not in markup.lower():
@@ -64,11 +67,12 @@ class PublicExample:
             raise InputError('案例目录不能是符号链接。')
         self.client = transport or SafeHTTP({'boards-api.greenhouse.io'}, timeout=15,
                                             max_bytes=500000, interval=2)
+        # Persistent per-workspace quota; the endpoint never accepts URL/Key/board input.
         self.ledger = RateLedger(self.root/'rates.sqlite', Limits(request_interval=30,
                                                                  requests_hour=12, requests_day=24))
 
     def run(self, data):
-        if data != {'consent': True}:
+        if set(data) != {'consent'} or data.get('consent') is not True:
             raise InputError('请点击确认获取公开案例；不接受网址、密钥或额外参数。')
         with writer_lock(self.workspace.root):
             return self._run()
@@ -93,7 +97,7 @@ class PublicExample:
                  'cache_reused': False, 'network_requests_this_click': 1,
                  'scope': 'Anthropic公开架构师岗位；不是BOSS/中国大陆平台实站认证。', 'report_id': ''}
         try:
-            payload = self.client.json(API_URL)
+            payload = self.client.json(API_URL)  # no authentication header; no API redirect following
             record = parse_public_job(payload)
             with Store(self.workspace.db) as store:
                 store.add(record)
@@ -115,6 +119,7 @@ class PublicExample:
                          code='real_source_received')
             atomic_json(self.root/(audit['id']+'.json'), audit)
             atomic_json(last, audit)
+            # Attach source audit to the report and its hash manifest.
             folder = self.workspace.root/'reports'/report_id
             atomic_json(folder/'public_source.json', audit)
             manifest['output_files_sha256']['public_source.json'] = hashlib.sha256((folder/'public_source.json').read_bytes()).hexdigest()
@@ -123,7 +128,7 @@ class PublicExample:
                     'message': '已从真实公开接口取得正文并生成本批报告；英文原文保留，不是合成演示。'}
         except (FetchError, ValueError, TypeError, KeyError) as exc:
             code = exc.code if isinstance(exc, FetchError) else 'example_processing_failed'
-            audit.update(code=code)
+            audit.update(success=False, report_id='', code=code)
             atomic_json(self.root/(audit['id']+'.json'), audit)
             atomic_json(last, audit)
             return {**audit, 'message': '真实案例未获取成功：'+code+'。来源可能已下架或网络不可达；未使用合成数据替代。'}

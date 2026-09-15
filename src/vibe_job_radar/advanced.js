@@ -110,7 +110,23 @@ $("generate").onclick=()=>act(async()=>{const result=await api("/api/evidence/ge
   table("generated-coverage",["岗位","人工声明映射覆盖率","说明"],result.coverage.map(r=>[r.title,r.evidence_mapping_coverage,r.note]));table("generated-matrix",["要求ID","状态","证据ID","说明"],result.matrix.map(r=>[r.requirement_id,r.status,r.evidence_ids,r.note]));reportDownloads(result,"downloads");await refreshProfile();note("个人报告已生成，旧报告保持不变。");});
 $("export-evidence").onclick=()=>act(()=>download("/api/evidence/export","personal-evidence.zip"));
 async function refreshCollections(){const result=await api("/api/collection/list");options($("collect-history"),Object.fromEntries(result.runs.map(s=>[s.id,`${s.updated_at} · ${s.mode} · ${s.status} · ${s.id.slice(0,8)}`])),activeCollection);}
-function showCollection(s){activeCollection=s.id;$("collect-progress").textContent=`任务 ${s.id.slice(0,8)} · ${s.status} · 阶段 ${s.phase} · 搜索 ${s.search_requests}/${s.search_budget} · 正文尝试 ${s.detail_attempts}/${s.detail_budget} · 数据源页 ${s.feed_requests}/${s.feed_budget}`;table("collect-summary",["平台","搜索请求","正文状态","平台接入认证"],Object.entries(s.platform_summary).map(([k,v])=>[k,v.queries_attempted,JSON.stringify(v.detail_outcomes),"未认证；仅显示本次观测"]));$("collect-json").textContent=JSON.stringify(s,null,2);$("collect-result").replaceChildren();if(s.report_id){$("collect-result").append(button("下载采集审计",()=>download(`/api/download/${s.report_id}/collection_manifest.json`,"collection_manifest.json")),button("下载逐条要求",()=>download(`/api/download/${s.report_id}/requirements_zh.csv`,"requirements_zh.csv")));}}
+function showCollection(s){
+  activeCollection=s.id;
+  $("collect-progress").textContent=`任务 ${s.id.slice(0,8)} · ${s.route_label||s.mode} · ${s.status} · 阶段 ${s.phase} · 正文尝试 ${s.detail_attempts}/${s.detail_budget}`;
+  table("collect-summary",["平台","搜索请求","正文状态","平台接入认证"],Object.entries(s.platform_summary).map(([k,v])=>[k,v.queries_attempted,JSON.stringify(v.detail_outcomes),"未认证；仅显示本次观测"]));
+  $("collect-json").textContent=JSON.stringify(s,null,2);
+  const root=$("collect-result");root.replaceChildren();
+  root.append(text("p",s.user_summary||"请核对每条实际结果。"));
+  for(const row of s.details){
+    const card=text("div","");card.className="card";
+    card.append(text("strong",row.status_message||row.status),text("p",row.url),text("p",row.next_action||""));
+    if(row.final_url)card.append(text("p","最终正文地址："+row.final_url));
+    if(row.fetch_diagnostic){const detail=document.createElement("details");detail.append(text("summary","本条跳转与请求诊断（已移除目标参数）"),text("pre",JSON.stringify(row.fetch_diagnostic,null,2)));card.append(detail);}
+    root.append(card);
+  }
+  if(s.details.some(d=>!["ok","fresh_reused"].includes(d.status))){const link=text("a","进入浏览器向导（与当前HTTP任务不共享会话）");link.href="/guided";root.append(link);}
+  if(s.report_id)root.append(button("下载采集审计",()=>download(`/api/download/${s.report_id}/collection_manifest.json`,"collection_manifest.json")),button("下载逐条要求",()=>download(`/api/download/${s.report_id}/requirements_zh.csv`,"requirements_zh.csv")));
+}
 async function continueCollection(){if(busy||collecting)return;collecting=true;looping=true;updateButtons();try{while(looping){const s=await api("/api/collection/step",{id:activeCollection,api_key:$("collect-form").elements.api_key.value});showCollection(s);if(["completed","needs_attention","empty"].includes(s.status)){looping=false;$("collect-form").elements.api_key.value="";note(`采集结束：${s.status}。请核对各平台失败和预算跳过项。`);await refreshProfile();break;}await new Promise(resolve=>setTimeout(resolve,30));}}catch(error){note(error.message);looping=false;}finally{looping=false;try{await refreshCollections();}catch(error){note(error.message);}finally{collecting=false;updateButtons();}}}
 $("collect-form").onsubmit=async event=>{event.preventDefault();if(collecting||busy)return;let created=false;await act(async()=>{const d=collectionGuide.data();const check=await api("/api/collection/preview",d);collectionGuide.render(check);if(!check.ready)return;delete d.api_key;showCollection(await api("/api/collection/start",d));await refreshCollections();created=true;});if(created)await continueCollection();};
 $("collect-pause").onclick=()=>{looping=false;note("已请求暂停；当前请求结束后不再发出下一次请求。任务进度已保留。");};

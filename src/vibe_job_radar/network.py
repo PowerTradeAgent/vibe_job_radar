@@ -11,7 +11,7 @@ import json
 import socket
 import ssl
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 from .utils import domain_matches
@@ -31,6 +31,7 @@ class Response:
     headers: dict[str, str]
     body: bytes
     url: str
+    redirect_trace: list[dict] = field(default_factory=list)
 
     def text(self) -> str:
         import re
@@ -94,7 +95,7 @@ class SafeHTTP:
         self.blocked_hosts: set[str] = set()
 
     def request(self, url: str, *, method: str = "GET", headers: dict | None = None,
-                body: bytes | None = None) -> Response:
+                body: bytes | None = None, return_redirect: bool = False) -> Response:
         host, ip, target = validate_public_url(url, self.allowed_domains)
         if host in self.blocked_hosts:
             raise FetchError("host_circuit_open", host)
@@ -112,7 +113,11 @@ class SafeHTTP:
                 self.blocked_hosts.add(host)
                 raise FetchError(f"http_{resp.status}", "stopped; no bypass or retry")
             if 300 <= resp.status < 400:
-                raise FetchError("redirect_not_followed", "inspect and explicitly supply the permitted final URL")
+                if return_redirect and method == "GET" and not headers and body is None:
+                    # Return metadata only; a higher-level policy validates the next
+                    # target. API calls retain the original non-following contract.
+                    return Response(resp.status, response_headers, b"", url)
+                raise FetchError("redirect_not_followed", "redirect requires an explicit site policy")
             if response_headers.get("content-encoding", "identity").lower() != "identity":
                 raise FetchError("unexpected_compression")
             data = resp.read(self.max_bytes + 1)
@@ -126,6 +131,10 @@ class SafeHTTP:
         finally:
             self.last_request[host] = time.monotonic()
             conn.close()
+
+    def public_get(self, url: str) -> Response:
+        """Anonymous one-hop GET. Never follows or forwards credentials."""
+        return self.request(url, return_redirect=True)
 
     def json(self, url: str, *, method: str = "GET", headers: dict | None = None, payload: dict | None = None) -> dict:
         hdr = {"Accept": "application/json", **(headers or {})}
@@ -146,18 +155,65 @@ class SafeHTTP:
 
 
 class SiteFetcher:
-    def __init__(self, permitted_domains: set[str], transport: SafeHTTP | None = None):
-        if not permitted_domains:
-            raise ValueError("explicit permitted domains are required")
-        self.transport = transport or SafeHTTP(permitted_domains, interval=2.0)
-        self.robots: dict[str, RobotFileParser | None] = {}
+    """Anonymous HTML acquisition with a bounded, per-hop redirect policy.
 
-    def fetch(self, url: str) -> Response:
+    A redirect never grants permission, copies cookies, bypasses robots or resets
+    the transport's request interval. API clients remain strict/non-following.
+    """
+    def __init__(self, permitted_domains: set[str], transport: SafeHTTP | None = None,
+                 *, max_redirects: int = 3):
+        if not permitted_domains or type(max_redirects) is not int or not 0 <= max_redirects <= 5:
+            raise ValueError("explicit domains and a 0..5 redirect limit are required")
+        self.domains = set(permitted_domains)
+        self.transport = transport or SafeHTTP(permitted_domains, interval=2.0)
+        self.max_redirects = max_redirects
+        self.robots: dict[str, RobotFileParser | None] = {}
+        self.last_diagnostic: dict = {}
+
+    def _get(self, url: str, phase: str) -> Response:
+        from .redirect_policy import observed_origin
+        self.last_diagnostic.update(phase=phase, last_origin=observed_origin(url))
+        self.last_diagnostic["http_attempts"] += 1
+        # Injected offline transports may expose only request(); production uses
+        # SafeHTTP.public_get with pinned TLS and no implicit following.
+        get = getattr(self.transport, "public_get", None) or self.transport.request
+        response = get(url)
+        self.last_diagnostic["http_status"] = response.status
+        return response
+
+    def _follow(self, current: str, response: Response, phase: str,
+                visited: set[str]) -> str:
+        from .redirect_policy import redirect_target, observed_origin
+        hop = {"phase": phase, "status": response.status, "from_origin": observed_origin(current),
+               "target_origin": observed_origin(response.headers.get("location", ""), current)}
+        self.last_diagnostic["redirects"].append(hop)
+        try:
+            if len(self.last_diagnostic["redirects"]) > self.max_redirects:
+                raise FetchError("redirect_limit")
+            target = redirect_target(current, response.headers.get("location"), self.domains,
+                                     status=response.status, robots=phase == "robots")
+            if target in visited:
+                raise FetchError("redirect_loop")
+            visited.add(target)
+            hop["result"] = "followed"
+            return target
+        except FetchError as exc:
+            hop["result"] = exc.code
+            raise
+
+    def _ensure_robots(self, url: str) -> None:
         p = urlsplit(url)
         origin = f"https://{p.netloc}"
         if origin not in self.robots:
-            self.robots[origin] = None  # Fail closed, including unavailable/404 robots.
-            result = self.transport.request(origin + "/robots.txt")
+            self.robots[origin] = None
+            current = origin + "/robots.txt"
+            visited = {current}
+            while True:
+                result = self._get(current, "robots")
+                if 300 <= result.status < 400:
+                    current = self._follow(current, result, "robots", visited)
+                    continue
+                break
             if result.status == 200 and not result.headers.get("content-type", "").lower().startswith("text/html"):
                 rp = RobotFileParser()
                 rp.parse(result.text().splitlines())
@@ -173,13 +229,32 @@ class SiteFetcher:
         rate = rp.request_rate(USER_AGENT)
         if rate and rate.requests:
             self.transport.interval = max(self.transport.interval, rate.seconds / rate.requests)
-        result = self.transport.request(url)
-        if result.status != 200:
-            raise FetchError(f"http_{result.status}")
-        if "html" not in result.headers.get("content-type", "").lower():
-            raise FetchError("not_html")
-        import re
-        # Challenge markers, not the ubiquitous login button on otherwise public pages.
-        if re.search(r"请完成.{0,12}验证|访问过于频繁|滑动.{0,8}验证|安全验证|访问异常|captcha|登录后.{0,8}(?:查看|浏览)", result.text(), re.I):
-            raise FetchError("login_or_challenge", "manual review required")
-        return result
+
+    def fetch(self, url: str) -> Response:
+        from .redirect_policy import validate_target, page_gate
+        self.last_diagnostic = {"phase": "validation", "http_attempts": 0, "redirects": []}
+        try:
+            current = validate_target(url, self.domains)
+            visited = {current}
+            while True:
+                # Every redirected detail path is checked, including same-origin
+                # redirects into a path disallowed by an already cached robots.
+                self.last_diagnostic["phase"] = "robots"
+                self._ensure_robots(current)
+                result = self._get(current, "detail")
+                if 300 <= result.status < 400:
+                    current = self._follow(current, result, "detail", visited)
+                    continue
+                if result.status != 200:
+                    raise FetchError(f"http_{result.status}")
+                if "html" not in result.headers.get("content-type", "").lower():
+                    raise FetchError("not_html")
+                # Visible text only: an unused captcha script is not a challenge.
+                page_gate(result.text())
+                result.url = current
+                result.redirect_trace = list(self.last_diagnostic["redirects"])
+                self.last_diagnostic.update(phase="complete", final_url=current, outcome="ok")
+                return result
+        except FetchError as exc:
+            self.last_diagnostic["outcome"] = exc.code
+            raise
