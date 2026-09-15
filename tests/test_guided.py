@@ -233,7 +233,7 @@ class ServiceTests(unittest.TestCase):
              patch.object(self.service, '_health_probe', return_value={**environment_report(), 'ready': True, 'message': 'verified'}) as probe:
             self.service.install({'consent':True});self.wait()
         self.assertEqual(run.call_count,2)
-        self.assertEqual(run.call_args_list[0].args[0], [sys.executable, '-m', 'pip', 'install', 'playwright>=1.48,<2'])
+        self.assertEqual(run.call_args_list[0].args[0], [sys.executable, '-m', 'pip', 'install', 'playwright>=1.48,<2', 'packaging>=24.2'])
         self.assertEqual(run.call_args_list[1].args[0], [sys.executable, '-m', 'playwright', 'install', 'chromium'])
         probe.assert_called_once()
         self.assertEqual(self.service.state()['installation'],'installed')

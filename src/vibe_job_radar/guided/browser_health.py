@@ -19,10 +19,12 @@ from ..utils import utc_now
 from .contracts import CrawlError
 
 PLAYWRIGHT_REQUIREMENT = 'playwright>=1.48,<2'
+VERSION_CHECK_REQUIREMENT = 'packaging>=24.2'
 HEALTH_MESSAGES = {
     'not_checked': '尚未验证浏览器能否启动。包版本不等于就绪；请点“检查浏览器（不采集）”。',
     'browser_ready': '采集浏览器已通过空白页启动检查。只验证本机组件，不代表已登录或网站可采集。',
     'playwright_missing': '当前 Python 缺少 Playwright。请点击安装/修复，或使用下方当前解释器命令安装。',
+    'version_validator_missing': '浏览器版本校验组件 packaging 缺失或无法导入。请点安装/修复；基础本地分析不受影响。',
     'playwright_incompatible': '当前 Playwright 版本不满足项目要求（>=1.48,<2）。修复组件后重新检查。',
     'browser_executable_missing': 'Playwright 包存在，但配套 Chromium 可执行文件不存在。请运行当前 Python 的 -m playwright install chromium；pip install Chromium 不会安装该浏览器。',
     'browser_permission_denied': '浏览器或驱动被系统拒绝执行。请检查文件权限和安全软件阻止记录；不要关闭安全防护。',
@@ -61,8 +63,20 @@ def package_version(name: str) -> str | None:
 
 
 def supported_version(value: str | None) -> bool:
-    m = re.fullmatch(r'(\d+)\.(\d+)(?:\.\d+)?', value or '')
-    return bool(m and (1, 48) <= (int(m[1]), int(m[2])) < (2, 0))
+    """Use pip-compatible PEP 440 semantics, including post/local releases.
+
+    packaging belongs to the optional browser extra, not the offline core. A
+    missing validator is diagnosed separately and installed by the repair action.
+    """
+    if not value:
+        return False
+    from packaging.specifiers import SpecifierSet
+    from packaging.version import InvalidVersion, Version
+    try:
+        return SpecifierSet(PLAYWRIGHT_REQUIREMENT.removeprefix('playwright')).contains(Version(value))
+    except InvalidVersion:
+        return False
+
 
 
 def command_help() -> dict:
@@ -70,7 +84,7 @@ def command_help() -> dict:
     exe = sys.executable.replace('\\', '/')
     quoted = '"' + exe.replace('"', '') + '"'
     prefix = '& ' if os.name == 'nt' else ''
-    return {'package': f'{quoted} -m pip install "{PLAYWRIGHT_REQUIREMENT}"',
+    return {'package': f'{quoted} -m pip install "{PLAYWRIGHT_REQUIREMENT}" "{VERSION_CHECK_REQUIREMENT}"',
             'browser': f'{quoted} -m playwright install chromium',
             'powershell_browser': f'{prefix}{quoted} -m playwright install chromium'}
 
@@ -80,6 +94,7 @@ def environment_report() -> dict:
     return {'schema_version': 1, 'checked_at': utc_now(), 'python': sys.executable,
             'python_version': platform.python_version(), 'playwright_version': package_version('playwright'),
             'chromium_python_package': browser_package,
+            'version_validator_package': package_version('packaging'),
             'warnings': (['检测到同名 Chromium Python 包；它不是 Playwright 的浏览器，本项目不使用或导入它。']
                          if browser_package else []),
             'browser_cache_override': safe_text(os.environ.get('PLAYWRIGHT_BROWSERS_PATH', ''), 1000),
@@ -144,6 +159,7 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None)
         backend = PlaywrightBackend(builtins().get('boss'), None, Event(), headless=headless,
                                     executable_path=executable_path, transport_factory=_OfflineTransport)
         # Actual same page/context initialization as collection, no navigation to a site.
+        backend.startup_report['stage'] = 'blank_page'
         backend.page.set_content('<title>Vibe Radar browser check</title><p>本机浏览器检查成功</p>')
         if backend.page.title() != 'Vibe Radar browser check':
             raise RuntimeError('blank page verification failed')
@@ -152,7 +168,8 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None)
     except BrowserStartupError as exc:
         return exc.report
     except Exception as exc:
-        return failed_report(environment_report(), exc, code='browser_check_failed')
+        return failed_report(backend.startup_report if backend is not None else environment_report(),
+                             exc, code='browser_check_failed')
     finally:
         if backend:
             backend.close()

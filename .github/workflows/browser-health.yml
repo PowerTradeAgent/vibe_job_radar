@@ -28,7 +28,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install selected Python SDK
-        run: python -m pip install "${{ matrix.playwright }}"
+        run: python -m pip install "${{ matrix.playwright }}" "packaging>=24.2"
       - name: Install matching Windows Chromium (same command as desktop users)
         if: runner.os == 'Windows'
         run: python -m playwright install chromium

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import importlib
+import stat
 from pathlib import Path
 import json
 import re
@@ -30,16 +31,36 @@ class PlaywrightBackend:
         self.startup_report = environment_report()
         self.startup_report['mode'] = 'headless' if headless else 'headed'
         try:
+            # Reject incompatible metadata before importing any Playwright code.
+            # Otherwise an in-process repair leaves the old client cached while
+            # the installed driver/metadata already come from the new package.
+            self.startup_report['stage'] = 'version'
+            version = self.startup_report['playwright_version']
+            if version is None:
+                raise BrowserStartupError(failed_report(self.startup_report,
+                    ModuleNotFoundError('Playwright distribution is absent'), code='playwright_missing'))
+            try:
+                compatible = supported_version(version)
+            except ImportError as exc:
+                raise BrowserStartupError(failed_report(self.startup_report, exc,
+                    code='version_validator_missing')) from exc
+            if not compatible:
+                raise BrowserStartupError(failed_report(self.startup_report,
+                    RuntimeError('unsupported Playwright version'), code='playwright_incompatible'))
             self.startup_report['stage'] = 'import'
             importlib.invalidate_caches()
             from playwright.sync_api import sync_playwright
-            if not supported_version(self.startup_report['playwright_version']):
-                raise BrowserStartupError(failed_report(self.startup_report, RuntimeError('unsupported Playwright version'), code='playwright_incompatible'))
             self.startup_report['stage'] = 'driver'
             self.runtime = sync_playwright().start()
             expected = str(executable_path or self.runtime.chromium.executable_path)
             self.startup_report.update(stage='executable', executable_path=safe_text(expected),
-                                       executable_exists=Path(expected).is_file())
+                                       executable_exists=None)
+            try:
+                self.startup_report['executable_exists'] = stat.S_ISREG(Path(expected).stat().st_mode)
+            except (FileNotFoundError, NotADirectoryError):
+                self.startup_report['executable_exists'] = False
+            # PermissionError and other stat errors must retain their real cause;
+            # a path that cannot be inspected is not a proved missing executable.
             # Headed collection needs the regular Chromium build, not only the
             # separately installed headless shell. Test backends can select a path.
             if (not headless or executable_path) and not self.startup_report['executable_exists']:

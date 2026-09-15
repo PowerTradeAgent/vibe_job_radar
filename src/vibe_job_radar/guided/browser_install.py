@@ -11,7 +11,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
-from .browser_health import PLAYWRIGHT_REQUIREMENT, safe_text
+from .browser_health import PLAYWRIGHT_REQUIREMENT, VERSION_CHECK_REQUIREMENT, safe_text
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,7 @@ class CommandResult:
 
 
 def install_commands() -> tuple[tuple[str, list[str]], ...]:
-    return (('package_install', [sys.executable, '-m', 'pip', 'install', PLAYWRIGHT_REQUIREMENT]),
+    return (('package_install', [sys.executable, '-m', 'pip', 'install', PLAYWRIGHT_REQUIREMENT, VERSION_CHECK_REQUIREMENT]),
             ('browser_download', [sys.executable, '-m', 'playwright', 'install', 'chromium']))
 
 
