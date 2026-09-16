@@ -186,8 +186,8 @@ class HandoffTests(unittest.TestCase):
         data = self.request()
         with patch.object(self.guided, '_submit'):
             result = self.bridge.handoff_start(data)
-        path = self.guided._path(result['id']); child = json.loads(path.read_text())
-        child['handoff']['parent_id'] = 'another'; path.write_text(json.dumps(child))
+        path = self.guided._path(result['id']); child = json.loads(path.read_text(encoding='utf-8'))
+        child['handoff']['parent_id'] = 'another'; path.write_text(json.dumps(child, ensure_ascii=False), encoding='utf-8')
         before = path.read_bytes()
         with self.assertRaises(InputError): self.preview()
         self.assertEqual(before, path.read_bytes())
@@ -202,8 +202,30 @@ class HandoffTests(unittest.TestCase):
         self.state['details'][0]['fetch_diagnostic'] = {'private': 'DO-NOT-COPY'}; self.save()
         with patch.object(self.guided, '_submit'):
             r = self.bridge.handoff_start(self.request())
-        self.assertNotIn('DO-NOT-COPY', self.guided._path(r['id']).read_text())
+        self.assertNotIn('DO-NOT-COPY', self.guided._path(r['id']).read_text(encoding='utf-8'))
         self.assertNotIn('DO-NOT-COPY', json.dumps(self.preview()))
+
+    def test_non_ascii_scope_round_trips_under_legacy_default(self):
+        self.state['rights_note'] = '本地研究：中文、café、设计 🧪'
+        self.save()
+        original = Path.read_text
+
+        def legacy_default(path, *args, **kwargs):
+            # Reproduce Windows' legacy default only for missing encodings;
+            # explicit UTF-8 in the product and test must still take effect.
+            if not args and kwargs.get('encoding') is None:
+                kwargs['encoding'] = 'cp1252'
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, 'read_text', legacy_default), patch.object(self.guided, '_submit'):
+            result = self.bridge.handoff_start(self.request())
+            child = self.guided._load(result['id'])
+            self.assertEqual(child['rights_note'], self.state['rights_note'])
+            self.assertTrue(self.bridge.handoff_start(self.request())['reused'])
+            self.assertEqual(self.preview()['rights_note'], self.state['rights_note'])
+        raw = self.guided._path(result['id']).read_bytes()
+        self.assertIn(self.state['rights_note'].encode('utf-8'), raw)
+        self.assertEqual(json.loads(raw.decode('utf-8'))['rights_note'], self.state['rights_note'])
 
     def test_actual_worker_produces_isolated_report_without_redoing_saved_row(self):
         DetailBackend.opens = []
