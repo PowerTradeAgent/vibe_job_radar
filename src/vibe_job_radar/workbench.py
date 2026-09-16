@@ -15,6 +15,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from .workspace import InputError, Workspace
 from .collection import Collector
+from .collection_handoff import CollectionHandoff
 from .guided.service import GuidedService, MESSAGES
 from .guided.contracts import CrawlError
 from .collection_guidance import CollectionGuidance
@@ -34,6 +35,7 @@ class LocalServer(ThreadingHTTPServer):
         self.guidance = CollectionGuidance(workspace)
         self.evidence = EvidenceService(workspace)
         self.guided = GuidedService(workspace)
+        self.handoff = CollectionHandoff(self.collector, self.guided)
         self.public_tasks = PublicTasks(workspace, hybrid_client=public_client)
         self.token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()
@@ -178,6 +180,9 @@ class Handler(BaseHTTPRequestHandler):
         elif route.startswith("/api/evidence/"):
             target = self.server.evidence
             methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "review", "upload", "metric", "save", "remove", "generate")}
+        elif route in {"/api/collection/handoff_preview", "/api/collection/handoff_start"}:
+            target = self.server.handoff
+            methods = {"/api/collection/" + name: name for name in ("handoff_preview", "handoff_start")}
         elif route.startswith("/api/collection/"):
             target = self.server.guidance if route == "/api/collection/preview" else self.server.collector
             methods = {"/api/collection/" + name: name for name in ("start", "step", "status", "list", "register", "preview")}

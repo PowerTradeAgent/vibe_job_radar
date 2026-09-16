@@ -1,7 +1,7 @@
 """Actual browser verifies existing report and improved failure UI; fixture upstream.
 
 Real public GET is separately exercised by check_live_public_example.py --live.
-The main HTTP server is unchanged: no new password or remote-target endpoints.
+The local server adds only consent-based task handoff endpoints; no password or arbitrary remote-target endpoints.
 """
 import contextlib
 import io
@@ -20,6 +20,21 @@ from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import Workspace
 from vibe_job_radar.public_example import JOB_ID, SOURCE_URL
 from vibe_job_radar.network import SafeHTTP
+from vibe_job_radar.guided.contracts import PageSnapshot
+
+
+
+class HandoffFixtureBrowser:
+    """Artificial source boundary for the actual local UI/browser acceptance."""
+    opened = []
+    def __init__(self, *args): pass
+    def open(self, url, **kwargs):
+        self.opened.append(url)
+        return PageSnapshot(url, '<h1>AI架构师</h1><div class="job-sec-text">'
+                            '人工验收夹具，不是市场数据。要求熟练使用 Cursor 辅助开发，编写单元测试并进行代码审查。'
+                            '</div>')
+    def pump(self): pass
+    def close(self): pass
 
 
 def main():
@@ -38,6 +53,8 @@ def main():
             assert source.call_count==1
         result['checks'].append('user command saves one full record/report; repeat command visibly caches without extra upstream GET')
         server=LocalServer(Workspace(tmp))
+        server.guided.factory=HandoffFixtureBrowser
+        HandoffFixtureBrowser.opened=[]
         thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);thread.start()
         try:
             task=server.collector.start({'mode':'urls','platforms':['boss'],'permit_platforms':['boss'],
@@ -71,6 +88,29 @@ def main():
                 expect(page.locator('#collect-progress')).to_contain_text('无浏览器登录会话')
                 result['checks'].append('historical unknown redirect is distinguished from an unexecuted budget item')
                 page.screenshot(path=str(out/'redirect-guidance.png'),full_page=True)
+                page.get_by_role('button',name='将未完成链接转交浏览器（先预览，不联网）',exact=True).click()
+                expect(page.locator('#collect-result')).to_contain_text('原HTTP正文尝试 1/1，剩余 0')
+                assert not server.guided.state()['jobs']
+                assert not HandoffFixtureBrowser.opened
+                page.once('dialog',lambda dialog:dialog.dismiss())
+                page.get_by_role('button',name='确认转交并继续',exact=True).click()
+                assert not server.guided.state()['jobs']
+                page.once('dialog',lambda dialog:dialog.accept())
+                page.get_by_role('button',name='确认转交并继续',exact=True).click()
+                page.wait_for_url(server.origin+'/guided?task=*')
+                expect(page.locator('#task-status')).to_contain_text('批次结束',timeout=15000)
+                child=server.guided.state()['jobs'][0]
+                assert page.locator('#task').input_value()==child['id']
+                assert child['report_id'] and child['handoff']['parent_id']==task['id']
+                assert HandoffFixtureBrowser.opened==[task['details'][0]['url']]
+                assert server.collector._load(task['id'])['detail_attempts']==1
+                result['checks'].append('HTTP failure preview performs no network; cancel creates nothing; confirmation transfers exact failed URL, preserves budget and roles, produces isolated report in selected browser task')
+                page.goto(server.origin+'/advanced');page.locator('#collect-load').click()
+                page.get_by_role('button',name='将未完成链接转交浏览器（先预览，不联网）',exact=True).click()
+                expect(page.get_by_role('link',name='继续已保存的浏览器任务（不重复创建）',exact=True)).to_be_visible()
+                assert len(server.guided.state()['jobs'])==1 and len(HandoffFixtureBrowser.opened)==1
+                result['checks'].append('repeat preview points to persisted browser task without re-requesting successful records')
+                page.screenshot(path=str(out/'handoff-completed.png'),full_page=True)
                 page.set_viewport_size({'width':390,'height':844})
                 assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
                 assert not result['page_errors']

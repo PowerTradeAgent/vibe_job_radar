@@ -124,7 +124,23 @@ function showCollection(s){
     if(row.fetch_diagnostic){const detail=document.createElement("details");detail.append(text("summary","本条跳转与请求诊断（已移除目标参数）"),text("pre",JSON.stringify(row.fetch_diagnostic,null,2)));card.append(detail);}
     root.append(card);
   }
-  if(s.details.some(d=>!["ok","fresh_reused"].includes(d.status))){const link=text("a","进入浏览器向导（与当前HTTP任务不共享会话）");link.href="/guided";root.append(link);}
+  if(s.details.some(d=>!["ok","fresh_reused","pending","budget_skipped"].includes(d.status))){
+    const handoff=text("div","");root.append(handoff);
+    handoff.append(button("将未完成链接转交浏览器（先预览，不联网）",async()=>{
+      const plan=await api("/api/collection/handoff_preview",{id:s.id});handoff.replaceChildren(text("p",plan.notice));
+      handoff.append(text("p",`原HTTP正文尝试 ${plan.budget.used}/${plan.budget.limit}，剩余 ${plan.budget.remaining}；已成功、预算未执行、明确拒绝和限流条目不会自动转交。`));
+      handoff.append(text("p","沿用原授权范围："+plan.rights_note));
+      if(!plan.groups.length)handoff.append(text("p","没有符合转交条件的链接。请核对访问限制；程序不会换路线绕过拒绝。"));
+      for(const group of plan.groups){const section=text("div","");section.className="card";section.append(text("strong",group.label));
+        if(group.existing_url){const link=text("a","继续已保存的浏览器任务（不重复创建）");link.href=group.existing_url;section.append(link);handoff.append(section);continue;}
+        const choices=[];for(const item of group.items){const label=text("label","");const check=document.createElement("input");check.type="checkbox";check.checked=choices.length<Math.min(5,plan.max_transfer);choices.push({check,index:item.index});label.append(check,document.createTextNode(item.url+" · "+item.reason));section.append(label);}
+        section.append(button("确认转交并继续",async()=>{const indices=choices.filter(x=>x.check.checked).map(x=>x.index);
+          if(!indices.length||indices.length>plan.max_transfer)throw Error(`请选择1至${plan.max_transfer}条岗位。`);
+          if(!window.confirm(`沿用原授权范围：${plan.rights_note}\n将 ${indices.length} 条未成功链接交给浏览器，另授权最多 ${indices.length} 条正文尝试。原HTTP预算不退款，不传递账号、Cookie或密钥。仍遵守发布方规则；需要登录时由你在平台原生页完成。是否继续？`))return;
+          const result=await api("/api/collection/handoff_start",{id:plan.id,fingerprint:plan.fingerprint,platform:group.platform,indices,consent:true});location.assign(result.url);
+        }));handoff.append(section);}
+    }));
+  }
   if(s.report_id)root.append(button("下载采集审计",()=>download(`/api/download/${s.report_id}/collection_manifest.json`,"collection_manifest.json")),button("下载逐条要求",()=>download(`/api/download/${s.report_id}/requirements_zh.csv`,"requirements_zh.csv")));
 }
 async function continueCollection(){if(busy||collecting)return;collecting=true;looping=true;updateButtons();try{while(looping){const s=await api("/api/collection/step",{id:activeCollection,api_key:$("collect-form").elements.api_key.value});showCollection(s);if(["completed","needs_attention","empty"].includes(s.status)){looping=false;$("collect-form").elements.api_key.value="";note(`采集结束：${s.status}。请核对各平台失败和预算跳过项。`);await refreshProfile();break;}await new Promise(resolve=>setTimeout(resolve,30));}}catch(error){note(error.message);looping=false;}finally{looping=false;try{await refreshCollections();}catch(error){note(error.message);}finally{collecting=false;updateButtons();}}}
