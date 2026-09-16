@@ -66,7 +66,7 @@ class PublicExample:
         if self.root.is_symlink():
             raise InputError('案例目录不能是符号链接。')
         self.client = transport or SafeHTTP({'boards-api.greenhouse.io'}, timeout=15,
-                                            max_bytes=500000, interval=2)
+                                            max_bytes=500000, interval=2, network_policy=workspace.network_policy())
         # Persistent per-workspace quota; the endpoint never accepts URL/Key/board input.
         self.ledger = RateLedger(self.root/'rates.sqlite', Limits(request_interval=30,
                                                                  requests_hour=12, requests_day=24))
@@ -133,4 +133,5 @@ class PublicExample:
             audit.update(success=False, report_id='', code=code)
             atomic_json(self.root/(audit['id']+'.json'), audit)
             atomic_json(last, audit)
-            return {**audit, 'message': '真实案例未获取成功：'+code+'。来源可能已下架或网络不可达；未使用合成数据替代。'}
+            from .network_settings import DNS_MESSAGES
+            return {**audit, 'message': DNS_MESSAGES.get(code, '真实案例未获取成功：'+code+'。来源可能已下架或网络不可达；未使用合成数据替代。')}

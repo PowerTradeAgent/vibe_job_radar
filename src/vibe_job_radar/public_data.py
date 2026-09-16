@@ -21,6 +21,7 @@ from .network import FetchError, SafeHTTP
 from .public_contract import ContractError, PublicQuery, validate_batch, checked_registry
 from .utils import atomic_json, parse_time
 from .workspace import InputError
+from .public_cache_guard import CacheFailureGuard
 
 
 class PublicDataClient:
@@ -47,6 +48,7 @@ class PublicDataClient:
             raise InputError('公开数据缓存目录不能是符号链接。')
         self.client=transport or SafeHTTP({p.hostname},timeout=15,max_bytes=32_000_000,interval=2)
         self.scope=hashlib.sha256(self.origin.encode()).hexdigest()
+        self.failure_guard=CacheFailureGuard(self.root, self.origin)
         self._rate_blocked=False
         self._host=p.hostname
         self.ledger=RateLedger(self.root/'rates.sqlite',Limits(request_interval=2,requests_hour=60,requests_day=500),clock=clock)
@@ -69,6 +71,8 @@ class PublicDataClient:
         if type(now) not in (int,float) or not math.isfinite(now):
             raise ContractError('public_timestamp_invalid')
         path=self._path(query)
+        if path.is_symlink():
+            raise InputError('缓存文件不能是符号链接。')
         if not path.exists():
             return None
         try:
@@ -91,7 +95,9 @@ class PublicDataClient:
     def cached(self, query):
         """Local-only read remains possible even when the public service is off."""
         self._scope(query)
-        return self._cached(query,self.clock())
+        now=self.clock()
+        cached=self._cached(query,now)
+        return {**cached,'refresh_error':self.failure_guard.read(now)} if cached else None
 
     def search(self, query: PublicQuery, *, consent=False):
         self._scope(query)
@@ -100,11 +106,14 @@ class PublicDataClient:
         with writer_lock(self.root):
             now=self.clock()
             cached=self._cached(query,now)
-            if cached and not cached['stale']:
+            hard_failure=self.failure_guard.read(now)
+            if cached and not cached['stale'] and not hard_failure:
                 return cached
             try:
                 self.ledger.reserve(self.scope,'request')
             except RateLimit as exc:
+                if hard_failure:
+                    raise FetchError(hard_failure) from None
                 if cached and exc.code!='clock_rollback':
                     return {**cached,'refresh_error':exc.code}
                 raise
@@ -122,12 +131,21 @@ class PublicDataClient:
                     self.ledger.cool(self.scope,exc.retry_after or 300)
                 recoverable={'dns_error','network_error','http_429','http_500','http_502','http_503','http_504',
                              'local_proxy_connection_failed'}
+                if exc.code not in recoverable:
+                    self.failure_guard.record(exc.code,now)
+                elif hard_failure:
+                    raise FetchError(hard_failure) from None
                 if cached and exc.code in recoverable:
                     return {**cached,'refresh_error':exc.code,'network_requests':1}
                 raise  # No fallback on 401/403, invalid source, TLS, or bad data.
-            result=validate_batch(payload,query,self.registry)
-            if parse_time(result['generated_at']).timestamp()>now+300:
-                raise ContractError('public_timestamp_invalid')
+            try:
+                result=validate_batch(payload,query,self.registry)
+                if parse_time(result['generated_at']).timestamp()>now+300:
+                    raise ContractError('public_timestamp_invalid')
+            except ContractError as exc:
+                self.failure_guard.record(exc.code,now)
+                raise
             atomic_json(self._path(query),{'observed_at':now,'response':result})
+            self.failure_guard.clear()
             return {'response':result,'cache_reused':False,'stale':False,
                     'observed_at':now,'network_requests':1,'refresh_error':None}

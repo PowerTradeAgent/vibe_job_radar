@@ -9,6 +9,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+import threading
 import uuid
 from collections import Counter
 from contextlib import closing
@@ -71,6 +72,30 @@ class Workspace:
         self.db = self.root / "jobs.sqlite"
         self.demo_db = self.root / "demo.sqlite"
         self.config = load_config()
+        self._dns_lock = threading.Lock()
+
+    @property
+    def dns_resolver(self):
+        # Only one resolver/cache/rate budget per workspace object. No file or
+        # request is created merely by opening the page.
+        with self._dns_lock:
+            if not hasattr(self, '_dns_resolver'):
+                from .encrypted_dns import PublicResolver
+                from .network_settings import read_settings
+                self._dns_resolver = PublicResolver(permission=lambda: read_settings(self)['mode'] == 'fake_ip_doh')
+            return self._dns_resolver
+
+    def network_policy(self):
+        from .network_settings import capture_policy
+        return capture_policy(self)
+
+    def network_state(self):
+        from .network_settings import state
+        return state(self)
+
+    def network_preferences(self, data):
+        from .network_settings import save
+        return save(self, data)
 
     def doctor(self) -> dict:
         # Probe the actual directory and SQLite, not just os.access(). Never contacts a provider.
@@ -227,6 +252,7 @@ class Workspace:
 
     def discover(self, data: dict) -> dict:
         from .discovery import build_plan, discover
+        from .network_policy import use_policy
         roles, platforms = self.filters(data)
         budget = data.get("max_requests", 3)
         if type(budget) is not int or not 1 <= budget <= 20:
@@ -236,7 +262,7 @@ class Workspace:
         key = text_field(data, "api_key", limit=1000).strip() or os.environ.get("BRAVE_SEARCH_API_KEY", "")
         if not key:
             raise InputError("缺少 Brave Search API Key；可先预览检索计划或手工导入，无需招聘平台密码。")
-        with Store(self.db) as store:
+        with use_policy(self.network_policy()), Store(self.db) as store:
             report = discover(_SearchStore(store, key), self.config, api_key=key, plan=build_plan(self.config, platforms, roles),
                               max_requests=budget, pages=1, count=10)
         # Provider errors must never persist an accidentally echoed credential.

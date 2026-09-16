@@ -53,3 +53,8 @@ def explain(state: dict) -> dict:
             'route_label': {'urls': '公开HTTP（无浏览器登录会话）', 'search': '搜索API＋公开HTTP',
                             'feed': '用户配置的授权JSON源'}.get(state['mode'], state['mode']),
             'saved_detail_count': saved, 'budget_skipped_count': skipped}
+
+# Additional fixed messages; never display raw resolver/proxy payloads.
+from .network_settings import DNS_MESSAGES
+
+REASONS.update({code: ("网络解析未完成", message) for code, message in DNS_MESSAGES.items()})

@@ -58,7 +58,7 @@ class PublicTasks:
                     'query_available':self.hybrid is not None,'execution_mode':self.mode(),
                     'sources':[{'id':s.key,'label':s.label} for s in self.hybrid.registry.values()
                                if (s.local_access_approved if self.mode() == 'local_direct' else s.distribution_approved)] if self.hybrid else [],
-                    'network_policy':current_policy().describe(),
+                    'network_policy':self.workspace.network_policy().describe(),
                     'privacy':('本机请求固定公开接口，查询词和地区在本机筛选，不发给外部服务；个人材料和登录态不发送。'
                                if self.mode() == 'local_direct' else
                                '只发送已确认的查询字段；登录态、简历、个人证据和私人报告不发送。')}
@@ -105,8 +105,11 @@ class PublicTasks:
             self._save(**view,status='completed' if result.get('success') else 'failed')
         except Exception as exc:
             # Error messages from external providers may echo credentials.
-            self._save(status='failed',code='public_task_failed',error_type=type(exc).__name__,
-                       message='任务未完成，已有数据仍在本机；请检查来源可用性或稍后重新确认，不会生成模拟数据。')
+            from .network import FetchError
+            from .network_settings import DNS_MESSAGES
+            code = exc.code if isinstance(exc, FetchError) and exc.code in DNS_MESSAGES else 'public_task_failed'
+            self._save(status='failed',code=code,error_type=type(exc).__name__,
+                       message=DNS_MESSAGES.get(code,'任务未完成，已有数据仍在本机；请检查来源可用性或稍后重新确认，不会生成模拟数据。'))
 
     def _import(self, result, query):
         jobs=result['response']['jobs']

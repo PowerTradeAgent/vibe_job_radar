@@ -105,14 +105,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js"}
+        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js"}[path]
+                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
+            elif path == "/api/network/state":
+                self._json(200, self.server.workspace.network_state())
             elif path == "/api/public/state":
                 self._json(200, self.server.public_tasks.state())
             elif path == "/api/guided/state":
@@ -173,7 +175,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         route = urlsplit(self.path).path
         methods = {"/api/job": "add_job", "/api/import": "import_file", "/api/plan": "plan",
-                   "/api/discover": "discover", "/api/analyze": "analyze"}
+                   "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences"}
         target = self.server.workspace
         if route.startswith("/api/public/"):
             target = self.server.public_tasks
