@@ -1,72 +1,37 @@
-# 网络兼容修复进度：显式本机HTTP代理 + 公网多地址容错
+# 网络兼容：main 基线与本轮 SOCKS5 整合
 
-对应Issue #23、PR #24。当前仍是草稿，不是完整代理/TUN/VPN/虚拟机兼容发布。main没有被此PR修改。之前只有静态代理诊断；现在增加了一个范围明确、真实连接的本机HTTP CONNECT路径，不能再把当前PR称为“只有诊断”。
+## 当前基线
 
-## 本次可用范围
+PR #31 已由用户合并。上游 main 为 `bc243f67e03d47b08ffe33ed84c63e6cc561ed41`，源码树为 `52d1dbef733b21c1bd105e882f67cd6606ec8db2`。
+该 main 已提供本地公开目录查询、持久限频/任务续接与自动静态本机 HTTP 代理。生产服务器不是本地功能前提。
 
-1. 默认系统路由：保留一次DNS查询的全部已验证公网地址，IPv4/IPv6交错，最多4个候选，共享连接超时。DNS首个地址不可达时不再立即判整个目标不可达。
-2. 显式本机HTTP代理：启动程序前设置`VIBE_RADAR_HTTP_PROXY`，只接受`http://127.0.0.1:实际端口`、`http://localhost:实际端口`或`http://[::1]:实际端口`，不含账号密码。原HTTP、搜索、公开案例和Chromium的Python网络桥共用这一连接类。
-3. 代理以HTTP CONNECT连接已经通过原公网检查的**数字IP**，之后仍按原网站域名做SNI和TLS证书验证。不是让代理另外解析域名、不是把Fake-IP当公网。
-4. 代理失效或拒绝CONNECT，程序报`local_proxy_connection_failed`并停止，绝不自动切换到直连。网站403/429、证书失败或HTTP发送/读取失败不重放。
+本轮新开发分支从上述 main 建立，不在已经合并的 PR #31 上继续堆提交。以下 SOCKS5 整合在新 PR 合并前只属于开发分支。
 
-这是对此前大范围未提交方案的明确收窄：不包含远程DNS、加密DNS、任意LAN代理入口、SOCKS或代理身份认证，不削弱公网目标检查。不能以这一较小的已实现路径宣布原主体问题全部解决。
+## 本分支的实际连接策略
 
-## 你怎样使用
+1. 明确的应用专用 HTTP 或 SOCKS5 覆盖优先；同时配置两者时报冲突，不猜路线。
+2. 没有专用覆盖时，使用标准库返回的 `https`、`all`、版本明确的 `socks` 静态配置，依次优先。
+3. 自动模式允许原本的 `NO_PROXY` 按目标域名/端口/IP/CIDR 生效；明确专用覆盖不被环境排除规则偷偷改成直连。
+4. 本机匿名 HTTP CONNECT 与 SOCKS5 CONNECT 均接到同一个 `PinnedHTTPSConnection`，共享目标验证、TLS、请求与错误处理；HTTP、CLI、后台与浏览器 Python 桥均使用。
+5. 握手只发送已经验证的数字公网目标和443端口，再按原域名执行SNI/TLS。代理失败不直连，HTTP请求不因代理失败重放。
+6. 诊断显示实际选择协议与策略ID，策略ID包含协议，HTTP/SOCKS同一端口不会混为同一快照。诊断不宣称已实测网络。
 
-首先确认：目标域名的DNS检查是`passed: true`。还返回198.18.*时，这个模式仍不能取数；本次没有解决Fake-IP。
+默认不要求用户修改系统网络或额外填写应用端口；系统确实提供受支持的静态入口时自动采用。系统只给出PAC、认证代理、未标明版本的SOCKS或者仅浏览器扩展配置时，不能冒充已经自动支持。
 
-打开你已有的代理软件，在其设置中找到**实际HTTP代理或mixed端口**。不是订阅地址、控制接口端口、SOCKS专用端口，也不要把端口想当然写成7890。下面仅以你的实际端口恰好为7890举例。
+## 本轮边界与问题修复
 
-停止旧工作台，在修复源码目录的Git Bash中执行一行：
+保留 PR #26（原提交 `905a082602273d0c899af6a3aab82df06d634225`）的匿名SOCKS5协议实现及全部28项原测试。新增纯 `from_url` 解析，不能临时改进程环境来选协议，也不能把旧的显式选择器覆盖到新 NetworkPolicy。
 
-```bash
-VIBE_RADAR_HTTP_PROXY=http://127.0.0.1:7890 /d/code_environment/anaconda_all_css/py312/python.exe scripts/start_workbench.py
-```
+修复 NO_PROXY：有效IPv6地址最后一段恰好为443时，不把它拆成端口；IP字面量规则不当作域名后缀匹配。括号IPv6加`:443`仍是正常端口规则。
 
-这个前缀仅为本次启动进程设置代理，不修改Windows、代理软件、VPN或其他程序。代理保持开启。正常进入工作台后沿用原操作，HTTP与浏览器桥都会使用同一明确选定的代理。
+## 明确未完成
 
-先验证已有公开案例也可以：
+Fake-IP/远端DNS、PAC求值、代理认证、VM宿主机LAN代理、网页持久网络设置，以及真实VPN/TUN产品矩阵仍由 #23 跟踪。匿名SOCKS5不是socks5h、SOCKS4或UDP；本分支不扩大公网目标约束，也不增加公共DNS请求。
 
-```bash
-VIBE_RADAR_HTTP_PROXY=http://127.0.0.1:7890 /d/code_environment/anaconda_all_css/py312/python.exe scripts/run_real_example.py
-```
+BOSS/猎聘/51job仍需真实站点认证；公开目录案例不替代指定来源。安装、登录连续性和长期任务分别继续验收。本轮没有生产部署、账号凭据上传或系统网络修改。
 
-正常输入y确认。案例是公开接口，不是BOSS或大陆站点验收。如果网站、代理或当前网络不可达，仍明确报失败；不以模拟数据代替。
+## 验证
 
-PowerShell等价形式（仅当前PowerShell进程及其子进程）：
+`python scripts/run_tests.py --report acceptance/results.json` 执行全部测试；28项原SOCKS测试文件字节与PR #26一致，另有自动策略/诊断/IPv6排除/真实SOCKS+TLS组合回归。测试使用明确人工的本地TLS源，不是用户VPN或招聘站点现场认证。新PR远端CI必须按新提交核验，不能借用main绿色结果。
 
-```powershell
-$env:VIBE_RADAR_HTTP_PROXY = "http://127.0.0.1:7890"
-& "D:\code_environment\anaconda_all_css\py312\python.exe" scripts/start_workbench.py
-```
-
-回到默认系统路由：停止服务，Git Bash执行`unset VIBE_RADAR_HTTP_PROXY`，PowerShell执行`Remove-Item Env:VIBE_RADAR_HTTP_PROXY -ErrorAction SilentlyContinue`，再正常启动。系统路由仍可能经过你的TUN/VPN；不等于程序要求关闭它们。
-
-不需要重装Python、修改工作区数据或增加抓取预算。使用的代理由你已有的软件提供，本项目不会自动创建代理、监听端口或扫描局域网。
-
-## 如何看设置
-
-使用同样的环境前缀运行`scripts/check_network_environment.py`，新增`explicit_loopback_proxy`会显示是否启用、配置是否有效、本机主机/端口及`target_dns: local_public_only`。该检查不联网，`connectivity_tested`仍为false。
-
-原`collector_applies_static_proxy=false`专指HTTP(S)_PROXY/ALL_PROXY/系统设置不会被自动采用；本程序专用VIBE_RADAR_HTTP_PROXY与它是不同配置。不能把“检测到系统代理”当“自动使用系统代理”。本次专用显式设置也不读取NO_PROXY；它是你为本程序整次运行选择的路径。
-
-## 仍然未解决
-
-| 环境/需求 | 当前结果 |
-|---|---|
-| 正常系统路由，公网DNS，首IPv6坏但其他IP可达 | 已提供有限预请求容错 |
-| 公网DNS，本机无认证HTTP代理可用 | 本次显式CONNECT路径可用；需实际可用端口 |
-| TUN/VPN，DNS为真实公网 | 可沿系统路由或明确选定的本机代理连接；未认证具体软件产品 |
-| Fake-IP/混合公网私网/DNS失败 | 仍拒绝或报告DNS失败，不能自动处理 |
-| SOCKS、代理账号密码、PAC、自动系统代理 | 尚未实现；不会降级假装成功 |
-| 虚拟机需连接宿主机LAN地址上的代理 | 此路径尚不支持，127.0.0.1只指虚拟机本身 |
-| 网页内选择/保存代理 | 尚未实现，当前为进程级显式设置 |
-| 代理失效、网站拒绝、无访问权限 | 如实停止，不能保证无条件取数 |
-
-## 测试证据与边界
-
-本机真实TCP HTTP CONNECT代理与真实TLS服务组成受控测试：代理看到的是数字公网地址符号，只有测试代理将它映射到测试服务器；生产没有该映射。测试覆盖HTTP与Chromium桥、TLS/SNI、POST仅一次、403不重放、代理407不直连、错误证书拒绝、IPv6 CONNECT格式以及私网/Fake-IP不发请求。
-
-这些不是用户本机代理软件的实站测试，也不是境外/大陆招聘网站认证。远端CI之前没有runner和执行步骤，不把本地通过改写为CI通过。每次结果见PR最终提交与验收记录。
-
-新连接层不发送招聘消息、不自动填写账号、不改变robots、站点配额或验证规则。Issue #23继续保留完整主体目标，PR未具备全部验收条件前保持草稿。
+详细合并映射与后续顺序见 [本轮接线说明](SOCKS_POLICY_INTEGRATION.md)。

@@ -114,7 +114,7 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
             self._local_proxy = self.network_policy.for_host(host)
         except LocalProxyError as exc:
             raise FetchError(exc.code) from exc
-        self.network_mode = 'loopback_http_proxy' if self._local_proxy else 'system_route'
+        self.network_mode = self.network_policy.transport_name(self._local_proxy)
         self.connection_attempts: list[dict] = []
         self.connected_ip: str | None = None
         super().__init__(host, port=443, timeout=timeout, context=ssl.create_default_context())

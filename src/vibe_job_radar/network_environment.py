@@ -3,7 +3,7 @@
 This module does NOT install a proxy transport, change DNS, test connectivity,
 forward requests, or relax the collector's public-address restrictions. Its
 purpose is to distinguish route selection from actual network certification.
-Static loopback HTTP settings are consumed by network_policy, not this inspector.
+Static loopback HTTP/SOCKS5 settings are consumed by network_policy, not this inspector.
 """
 from __future__ import annotations
 
@@ -48,27 +48,29 @@ def inspect_environment(host: str = 'www.zhipin.com', *, discover=None) -> dict:
         proxies = discovery()
         if not isinstance(proxies, dict):
             raise TypeError('proxy discovery did not return a mapping')
-        endpoints = {name: _describe_proxy(proxies[name]) for name in ('https', 'all', 'http') if proxies.get(name)}
+        endpoints = {name: _describe_proxy(proxies[name]) for name in ('https', 'all', 'http', 'socks') if proxies.get(name)}
         bypassed = proxy_bypass_environment(host, proxies) if host else None
         error = ''
     except Exception as exc:
         endpoints, bypassed = {}, None
         error = type(exc).__name__
     policy = NetworkPolicy.capture(discover=lambda: None if error else proxies).describe(host)
-    relevant = 'https' if 'https' in endpoints else ('all' if 'all' in endpoints else None)
+    relevant = 'https' if 'https' in endpoints else ('all' if 'all' in endpoints else ('socks' if 'socks' in endpoints else None))
     found = relevant is not None
     if error:
         message = '系统代理配置读取失败；不是已证明无代理。诊断只记录异常类型。'
     elif found:
-        message = ('检测到适用于HTTPS的静态代理配置；新会话按统一策略选择受支持的本机HTTP代理。'
+        message = ('检测到适用于HTTPS的静态代理配置；新会话按统一策略选择受支持的本机HTTP/SOCKS5代理。'
                    '检测和策略选择不是实际连接证明；TUN/VPN也可能在系统层接管流量。')
     else:
         message = ('没有发现适用于HTTPS的静态代理配置。此结果不能证明未使用TUN/VPN；'
                    'TUN/VPN系统路由和PAC动态代理不由此检查认证。')
-    from .loopback_proxy import LoopbackProxy, LocalProxyError
+    from .loopback_proxy import LocalProxyError
+    from .loopback_socks import select_loopback_proxy
     try:
-        selected = LoopbackProxy.from_environment()
+        selected = select_loopback_proxy()
         explicit = {'enabled': selected is not None, 'valid': True,
+                    'protocol': NetworkPolicy.transport_name(selected),
                     'host': selected.host if selected else None,
                     'port': selected.port if selected else None,
                     'target_dns': 'local_public_only', 'connectivity_tested': False}
@@ -76,7 +78,7 @@ def inspect_environment(host: str = 'www.zhipin.com', *, discover=None) -> dict:
         explicit = {'enabled': False, 'valid': False, 'error': exc.code,
                     'connectivity_tested': False}
     if explicit['enabled']:
-        message += ' 已明确配置本程序专用的本机HTTP代理；最终目标仍须通过公网DNS检查，未在本次诊断中测试连接。'
+        message += ' 已明确配置本程序专用的本机代理；最终目标仍须通过公网DNS检查，未在本次诊断中测试连接。'
     elif not explicit['valid']:
         message += ' 本程序专用代理配置无效，实际请求会报错而非静默直连。'
     return {'schema_version': 1, 'python': sys.executable, 'os': platform.system(),
@@ -84,7 +86,7 @@ def inspect_environment(host: str = 'www.zhipin.com', *, discover=None) -> dict:
             'configuration_read_error_type': error, 'proxy_candidates': endpoints,
             'https_candidate_key': relevant, 'standard_no_proxy_match': bypassed,
             'collector_applies_static_proxy': (policy['source'] == 'automatic_static'
-                                                and policy['transport'] == 'loopback_http_proxy'),
+                                                and policy['transport'] in {'loopback_http_proxy', 'loopback_socks5_proxy'}),
             'selected_policy': policy,
             'explicit_loopback_proxy': explicit,
             'tun_or_vpn_detected': None, 'virtual_machine_detected': None,

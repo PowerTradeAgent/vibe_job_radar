@@ -63,12 +63,12 @@ class PolicyTests(unittest.TestCase):
             self.assertFalse(_bypasses('example.com',('8.8.0.0/16',)))
 
     def test_configured_no_proxy_can_exclude_unsupported_proxy(self):
-        p = self.capture({'https':'socks5://127.0.0.1:8001','no':'example.com'})
+        p = self.capture({'https':'socks5h://127.0.0.1:8001','no':'example.com'})
         self.assertIsNone(p.for_host('example.com'))
         with self.assertRaises(LocalProxyError): p.for_host('other.com')
 
     def test_unknown_proxy_or_credentials_fails_without_direct_fallback(self):
-        for raw in ('socks5://127.0.0.1:8001','http://10.0.0.1:8001',
+        for raw in ('socks5h://127.0.0.1:8001','http://10.0.0.1:8001',
                     'http://secret:DO-NOT-ECHO@127.0.0.1:8001','http://127.0.0.1:8001/path'):
             p = self.capture({'https':raw})
             with self.subTest(raw=raw), self.assertRaises(FetchError), patch('socket.create_connection') as dial:
