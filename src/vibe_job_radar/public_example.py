@@ -128,6 +128,8 @@ class PublicExample:
                     'message': '已从真实公开接口取得正文并生成本批报告；英文原文保留，不是合成演示。'}
         except (FetchError, ValueError, TypeError, KeyError) as exc:
             code = exc.code if isinstance(exc, FetchError) else 'example_processing_failed'
+            if code == 'http_429':
+                self.ledger.cool('greenhouse_public_example', exc.retry_after or 300)
             audit.update(success=False, report_id='', code=code)
             atomic_json(self.root/(audit['id']+'.json'), audit)
             atomic_json(last, audit)

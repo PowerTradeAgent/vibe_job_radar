@@ -2,8 +2,8 @@
 
 This module does NOT install a proxy transport, change DNS, test connectivity,
 forward requests, or relax the collector's public-address restrictions. Its
-purpose is to expose the outstanding compatibility gap instead of misleading
-users into thinking detected OS settings are already applied by the collector.
+purpose is to distinguish route selection from actual network certification.
+Static loopback HTTP settings are consumed by network_policy, not this inspector.
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import platform
 import sys
 from urllib.parse import urlsplit
 from urllib.request import getproxies, proxy_bypass_environment
+from .network_policy import NetworkPolicy
 
 
 def _describe_proxy(value: object) -> dict:
@@ -30,7 +31,7 @@ def _describe_proxy(value: object) -> dict:
         return {'valid_endpoint_shape': True,
                 'endpoint': f'{scheme}://{safe_host}' + (f':{port}' if port else ''),
                 'credentials_present': parsed.username is not None or parsed.password is not None,
-                'application_support': 'not_implemented',
+                'application_support': 'see_selected_policy',
                 'connectivity_tested': False}
     except (ValueError, UnicodeError):
         return {'valid_endpoint_shape': False, 'message': '配置不是可识别的静态代理入口；未记录原值。'}
@@ -53,13 +54,14 @@ def inspect_environment(host: str = 'www.zhipin.com', *, discover=None) -> dict:
     except Exception as exc:
         endpoints, bypassed = {}, None
         error = type(exc).__name__
+    policy = NetworkPolicy.capture(discover=lambda: None if error else proxies).describe(host)
     relevant = 'https' if 'https' in endpoints else ('all' if 'all' in endpoints else None)
     found = relevant is not None
     if error:
         message = '系统代理配置读取失败；不是已证明无代理。诊断只记录异常类型。'
     elif found:
-        message = ('检测到适用于HTTPS的代理配置，但当前项目的自建采集连接尚未使用该配置。'
-                   'TUN/VPN仍可能在系统层接管流量，不能据此判断已绕过或已启用代理。')
+        message = ('检测到适用于HTTPS的静态代理配置；新会话按统一策略选择受支持的本机HTTP代理。'
+                   '检测和策略选择不是实际连接证明；TUN/VPN也可能在系统层接管流量。')
     else:
         message = ('没有发现适用于HTTPS的静态代理配置。此结果不能证明未使用TUN/VPN；'
                    'TUN/VPN系统路由和PAC动态代理不由此检查认证。')
@@ -81,9 +83,11 @@ def inspect_environment(host: str = 'www.zhipin.com', *, discover=None) -> dict:
             'host_for_config_check': host, 'proxy_configuration_detected': found,
             'configuration_read_error_type': error, 'proxy_candidates': endpoints,
             'https_candidate_key': relevant, 'standard_no_proxy_match': bypassed,
-            'collector_applies_static_proxy': False,
+            'collector_applies_static_proxy': (policy['source'] == 'automatic_static'
+                                                and policy['transport'] == 'loopback_http_proxy'),
+            'selected_policy': policy,
             'explicit_loopback_proxy': explicit,
             'tun_or_vpn_detected': None, 'virtual_machine_detected': None,
             'vm_note': '虚拟机的127.0.0.1是该虚拟机本身；诊断不猜宿主机地址、不扫描网关。',
             'message': message,
-            'scope': 'Read-only configuration, no DNS or connections; NOT a proxy compatibility implementation.'}
+            'scope': 'Read-only configuration and route decision, no DNS or connections; NOT a live compatibility certification.'}

@@ -1,4 +1,4 @@
-"""Small synchronous HTTPS transport: public IP pinning, verified TLS and opt-in loopback proxy.
+"""Small synchronous HTTPS transport: public IP pinning, verified TLS and shared static proxy policy.
 
 Site fetching is opt-in and additionally robots-gated. API calls use documented
 endpoints and explicit credentials, not the site-fetch path.
@@ -14,18 +14,33 @@ import socket
 import ssl
 import time
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 from .utils import domain_matches
 from .loopback_proxy import LoopbackProxy, LocalProxyError
+from .network_policy import NetworkPolicy, current_policy, use_policy
 
 USER_AGENT = "VibeJobRadar/0.1"
 
 
 class FetchError(RuntimeError):
-    def __init__(self, code: str, message: str = ""):
+    def __init__(self, code: str, message: str = "", *, retry_after: float | None = None):
         self.code = code
+        self.retry_after = retry_after
         super().__init__(f"{code}: {message}" if message else code)
+
+
+def retry_after_seconds(value: str, *, now=None) -> float:
+    """Keep publisher cooldown metadata without retaining response headers."""
+    try:
+        seconds=float(value)
+    except (ValueError,TypeError):
+        try:
+            seconds=parsedate_to_datetime(value).timestamp()-(time.time() if now is None else now)
+        except (ValueError,TypeError,OverflowError):
+            seconds=300
+    return max(300,seconds) if math.isfinite(seconds) else 86400
 
 
 @dataclass
@@ -89,12 +104,14 @@ def _connection_candidates(ips: str | tuple[str, ...]) -> tuple[str, ...]:
 
 
 class PinnedHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, host: str, ip: str | tuple[str, ...], timeout: float):
+    def __init__(self, host: str, ip: str | tuple[str, ...], timeout: float, *,
+                 network_policy: NetworkPolicy | None = None):
         if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("a finite positive connection timeout is required")
         self._pinned_ips = _connection_candidates(ip)
         try:
-            self._local_proxy = LoopbackProxy.from_environment()
+            self.network_policy = network_policy or current_policy()
+            self._local_proxy = self.network_policy.for_host(host)
         except LocalProxyError as exc:
             raise FetchError(exc.code) from exc
         self.network_mode = 'loopback_http_proxy' if self._local_proxy else 'system_route'
@@ -187,9 +204,10 @@ def validate_public_url(url: str, allowed_domains: set[str], *, all_addresses: b
 
 class SafeHTTP:
     def __init__(self, allowed_domains: set[str], *, timeout: float = 20.0, max_bytes: int = 5_000_000,
-                 interval: float = 1.0):
+                 interval: float = 1.0, network_policy: NetworkPolicy | None = None):
         if timeout <= 0 or max_bytes <= 0 or interval < 0:
             raise ValueError("invalid transport limits")
+        self.network_policy = network_policy or current_policy()
         self.allowed_domains = set(allowed_domains)
         self.timeout, self.max_bytes, self.interval = timeout, max_bytes, interval
         self.last_request: dict[str, float] = {}
@@ -203,7 +221,8 @@ class SafeHTTP:
         wait = self.interval - (time.monotonic() - self.last_request.get(host, 0))
         if wait > 0:
             time.sleep(wait)
-        conn = PinnedHTTPSConnection(host, ip, self.timeout)
+        with use_policy(self.network_policy):
+            conn = PinnedHTTPSConnection(host, ip, self.timeout)
         request_headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
         request_headers.update(headers or {})
         try:
@@ -212,7 +231,9 @@ class SafeHTTP:
             response_headers = {k.lower(): v for k, v in resp.getheaders()}
             if resp.status in (401, 403, 429):
                 self.blocked_hosts.add(host)
-                raise FetchError(f"http_{resp.status}", "stopped; no bypass or retry")
+                raise FetchError(f"http_{resp.status}", "stopped; no bypass or retry",
+                                 retry_after=retry_after_seconds(response_headers.get("retry-after", ""))
+                                 if resp.status == 429 else None)
             if 300 <= resp.status < 400:
                 if return_redirect and method == "GET" and not headers and body is None:
                     # Return metadata only; a higher-level policy validates the next

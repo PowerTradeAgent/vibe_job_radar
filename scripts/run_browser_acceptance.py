@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import threading
+from unittest.mock import patch
 from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
@@ -100,6 +101,22 @@ def main() -> int:
                         page.screenshot(path=str(output / "mobile-layout.png"), full_page=True)
                         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
                         result["checks"].append("390px viewport has no page-level horizontal overflow")
+                        # New real browser path, controlled provider fixture only.
+                        sys.path.insert(0, str(ROOT / "tests"))
+                        from test_redirect_recovery import fixture_payload
+                        from vibe_job_radar.network import SafeHTTP
+                        with patch.object(SafeHTTP, 'json', return_value=fixture_payload()) as source:
+                            page.once('dialog', lambda dialog: dialog.accept())
+                            page.locator('#public-example').click()
+                            expect(page.locator('#public-status')).to_contain_text('已从真实公开接口', timeout=15000)
+                            expect(page.locator('#counts')).to_contain_text('真实记录 2')
+                            expect(page.locator('#report-stats')).to_contain_text('正文岗位组 1')
+                            page.once('dialog', lambda dialog: dialog.accept())
+                            page.locator('#public-example').click()
+                            expect(page.locator('#public-status')).to_contain_text('复用10分钟', timeout=15000)
+                            assert source.call_count == 1
+                        result['checks'].append('public example button: consent, queued job, isolated report and cache; provider is a fixture')
+                        page.screenshot(path=str(output / 'public-example-mobile.png'), full_page=True)
                         assert result["page_errors"] == [], result["page_errors"]
                         assert result["external_application_requests"] == []
                         result["success"] = True

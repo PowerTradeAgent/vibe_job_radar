@@ -144,11 +144,11 @@ def main():
                 with page.expect_download() as download:
                     page.locator('#export').click()
                 download.value.save_as(output/'fixture-urls.txt')
-                assert '/job/1-final' in (output/'fixture-urls.txt').read_text()
+                assert '/job/1-final' in (output/'fixture-urls.txt').read_text(encoding='utf-8')
                 result['checks'].append('observed/resolved URLs exported instead of manually prepared by user')
                 page.screenshot(path=str(output/'guided-desktop.png'),full_page=True)
                 for p in Path(tmp).rglob('*.json'):
-                    text=p.read_text();assert PASSWORD not in text and ACCOUNT not in text
+                    text=p.read_text(encoding='utf-8');assert PASSWORD not in text and ACCOUNT not in text
                 assert PASSWORD not in json.dumps(server.guided.state())
                 page.reload();expect(page.locator('#result')).to_contain_text('已保存 3 个岗位')
                 page.locator('#stop').click();expect(page.locator('#task-status')).to_contain_text('已停止',timeout=15000)

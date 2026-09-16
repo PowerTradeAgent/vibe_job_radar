@@ -15,24 +15,32 @@ from urllib.parse import quote, unquote, urlsplit
 
 from .workspace import InputError, Workspace
 from .collection import Collector
+from .collection_handoff import CollectionHandoff
 from .guided.service import GuidedService, MESSAGES
 from .guided.contracts import CrawlError
 from .collection_guidance import CollectionGuidance
 from .evidence_ui import Conflict, EvidenceService
+from .public_tasks import PublicTasks
 
 MAX_BODY = 2_000_000
+_DEFAULT_PUBLIC_CLIENT = object()
 
 
 class LocalServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self, workspace: Workspace, port: int = 0):
+    def __init__(self, workspace: Workspace, port: int = 0, *, public_client=_DEFAULT_PUBLIC_CLIENT):
         self.workspace = workspace
         self.collector = Collector(workspace)
         self.guidance = CollectionGuidance(workspace)
         self.evidence = EvidenceService(workspace)
         self.guided = GuidedService(workspace)
+        self.handoff = CollectionHandoff(self.collector, self.guided)
+        if public_client is _DEFAULT_PUBLIC_CLIENT:
+            from .local_public import LocalPublicDataClient
+            public_client = LocalPublicDataClient(workspace)
+        self.public_tasks = PublicTasks(workspace, hybrid_client=public_client)
         self.token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()
         super().__init__(("127.0.0.1", port), Handler)
@@ -41,6 +49,7 @@ class LocalServer(ThreadingHTTPServer):
 
     def server_close(self):
         self.guided.close()
+        self.public_tasks.close()
         super().server_close()
 
     @property
@@ -104,6 +113,8 @@ class Handler(BaseHTTPRequestHandler):
                 name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
+            elif path == "/api/public/state":
+                self._json(200, self.server.public_tasks.state())
             elif path == "/api/guided/state":
                 self._json(200, self.server.guided.state())
             elif path == "/api/evidence/export":
@@ -164,12 +175,18 @@ class Handler(BaseHTTPRequestHandler):
         methods = {"/api/job": "add_job", "/api/import": "import_file", "/api/plan": "plan",
                    "/api/discover": "discover", "/api/analyze": "analyze"}
         target = self.server.workspace
-        if route.startswith("/api/guided/"):
+        if route.startswith("/api/public/"):
+            target = self.server.public_tasks
+            methods = {"/api/public/" + name: name for name in ("start", "search")}
+        elif route.startswith("/api/guided/"):
             target = self.server.guided
             methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export")}
         elif route.startswith("/api/evidence/"):
             target = self.server.evidence
             methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "review", "upload", "metric", "save", "remove", "generate")}
+        elif route in {"/api/collection/handoff_preview", "/api/collection/handoff_start"}:
+            target = self.server.handoff
+            methods = {"/api/collection/" + name: name for name in ("handoff_preview", "handoff_start")}
         elif route.startswith("/api/collection/"):
             target = self.server.guidance if route == "/api/collection/preview" else self.server.collector
             methods = {"/api/collection/" + name: name for name in ("start", "step", "status", "list", "register", "preview")}

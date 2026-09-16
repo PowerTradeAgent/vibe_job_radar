@@ -2,8 +2,8 @@
 
 This deliberately narrow transport does NOT implement the previously proposed
 Fake-IP/remote-DNS mode. Final destination DNS and all public-IP validation stay
-unchanged. It accepts only an explicitly selected loopback HTTP proxy, without
-credentials, from the owner's process environment. No PAC, SOCKS, LAN probing,
+unchanged. NetworkPolicy selects an anonymous loopback HTTP proxy from explicit
+application overrides or supported static system/environment settings. No PAC, SOCKS, LAN probing,
 DNS replacement, private target exceptions or fallback to direct connections.
 """
 from __future__ import annotations
@@ -43,7 +43,13 @@ class LoopbackProxy:
         raw = os.environ.get('VIBE_RADAR_HTTP_PROXY', '')
         if not raw.strip():
             return None
+        return cls.from_url(raw)
+
+    @classmethod
+    def from_url(cls, raw: str) -> LoopbackProxy:
         try:
+            if not isinstance(raw, str):
+                raise ValueError('invalid setting')
             if len(raw) > 2048 or any(ord(c) < 32 for c in raw):
                 raise ValueError('invalid setting')
             parsed = urlsplit(raw.strip())

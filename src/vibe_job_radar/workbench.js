@@ -26,7 +26,7 @@ async function operation(action) {
   notice("正在处理本次操作；请勿重复提交。搜索发现可能需要等待外部服务响应。");
   try { await action(); }
   catch (error) { notice(error.message || "操作失败，请检查输入与本地环境。"); }
-  finally { buttons.forEach((button) => { button.disabled = false; }); }
+  finally { buttons.forEach((button) => { button.disabled = false; }); await publicState().catch(() => {}); }
 }
 function table(target, headers, rows) {
   const element = document.createElement("table");
@@ -152,3 +152,73 @@ $("analyze").addEventListener("click", () => operation(async () => {
 }));
 if (!token) notice("缺少本地会话令牌，请打开终端中带 #token 的完整地址。");
 else refresh().catch((error) => notice(error.message));
+
+
+// Public tasks poll LOCAL state only. Loading this page never queries a source.
+let publicPolling = false, publicReport = '', publicNextQuery = null;
+async function publicState() {
+  const result = await request('/api/public/state');
+  const task = result.task;
+  $('public-status').textContent = task.message || '';
+  const local = result.execution_mode === 'local_direct';
+  $('public-service-status').textContent = local
+    ? '默认在本机直接获取公开招聘，查询词和地区在本机筛选；无需产品服务器、服务地址或 Key。'
+    : (result.query_available ? '使用操作方已配置的可选公开服务；仅发送确认的查询字段。'
+                             : '此实例已停用公开查询；公开案例和本地采集仍可使用。');
+  $('public-consent-text').textContent = result.privacy;
+  $('public-search-button').textContent = local ? '获取并在本机筛选' : '查询所选公开来源';
+  $('public-network').textContent = JSON.stringify(result.network_policy, null, 2);
+  const busy = ['queued', 'running'].includes(task.status);
+  $('public-example').disabled = busy;
+  $('public-search-button').disabled = busy || !result.query_available;
+  publicNextQuery = task.status === 'completed' && task.next_cursor
+    ? {...task.query, cursor: task.next_cursor} : null;
+  $('public-next').hidden = !publicNextQuery;
+  $('public-next').disabled = busy;
+  $('public-next').textContent = local ? '读取下一页（本地缓存）' : '确认获取下一页';
+  if (!$('public-source').options.length) for (const source of result.sources) {
+    const option = document.createElement('option'); option.value = source.id; option.textContent = source.label;
+    $('public-source').append(option);
+  }
+  return task;
+}
+async function watchPublic() {
+  if (publicPolling) return;
+  publicPolling = true;
+  try {
+    for (let i = 0; i < 120; i++) {
+      const task = await publicState();
+      if (!['queued', 'running'].includes(task.status)) {
+        if (task.status === 'completed' && task.report_id && task.report_id !== publicReport) {
+          publicReport = task.report_id;
+          await refresh(); showReport(await request('/api/report/' + task.report_id));
+        }
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    $('public-status').textContent = '任务仍在后台处理，已保存进度；刷新页面查看，不必重复提交。';
+  } catch (error) { $('public-status').textContent = error.message; }
+  finally { publicPolling = false; }
+}
+$('public-example').addEventListener('click', async () => {
+  if (!confirm('仅请求官方公开岗位接口，按来源限制获取并在本机生成报告。不上传简历或登录态。是否继续？')) return;
+  await operation(async () => { await request('/api/public/start', {consent: true}); });
+  await watchPublic();
+});
+$('public-search').addEventListener('submit', async event => {
+  event.preventDefault(); const form = event.currentTarget;
+  await operation(async () => { await request('/api/public/search', {
+    consent: form.elements.consent.checked,
+    query: {query: form.elements.query.value, region: form.elements.region.value,
+            source_scope: [form.elements.source.value], limit: 20}
+  }); });
+  await watchPublic();
+});
+$('public-next').addEventListener('click', async () => {
+  if (!publicNextQuery) return;
+  const query = {...publicNextQuery};
+  await operation(async () => { await request('/api/public/search', {consent: true, query}); });
+  await watchPublic();
+});
+if (token) watchPublic();

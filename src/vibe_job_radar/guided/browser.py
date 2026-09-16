@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlsplit
 
 from ..utils import domain_matches
 from .contracts import CrawlError, PageSnapshot
+from .rate import RateLimit
 from .transport import PinnedTransport
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
                              failed_report, supported_version, safe_text)
@@ -24,6 +25,7 @@ class PlaywrightBackend:
         self.wire = transport_factory(adapter, ledger, cancelled, progress)
         self.browser = self.context = self.page = self.runtime = None
         self.error = None
+        self.wait_error = None
         self.auth_mode = False
         self.redirects = 0
         self.resource_denials = set()
@@ -167,7 +169,11 @@ class PlaywrightBackend:
                 return
             if (request.resource_type == 'document' or exc.code not in {
                     'resource_domain_blocked', 'write_not_allowed', 'method_blocked'}):
-                self.error = exc.code
+                transient = {'rate_wait', 'publisher_wait', 'cooldown', 'http_429',
+                             'hourly_limit', 'daily_limit'}
+                if not isinstance(exc, RateLimit) or self.error is None or self.error in transient:
+                    self.error = exc.code
+                    self.wait_error = exc if isinstance(exc, RateLimit) else None
             try:
                 route.abort('blockedbyclient')
             except Exception:
@@ -198,13 +204,14 @@ class PlaywrightBackend:
             if self.cancelled.is_set():
                 raise CrawlError('paused')
             if self.error:
-                raise CrawlError(self.error)
+                raise getattr(self, 'wait_error', None) or CrawlError(self.error)
             self.page.wait_for_timeout(250)
         if self.error:
-            raise CrawlError(self.error)
+            raise getattr(self, 'wait_error', None) or CrawlError(self.error)
 
     def open(self, url: str, *, authentication: bool = False) -> PageSnapshot:
         self.auth_mode, self.error, self.redirects = authentication, None, 0
+        self.wait_error = None
         self.adapter.accept_url(url)
         self.wire.blocked.clear()  # a new explicit navigation still obeys durable cooldown
         try:
@@ -214,11 +221,11 @@ class PlaywrightBackend:
         except CrawlError:
             raise
         except Exception as exc:
-            raise CrawlError(self.error or 'page_not_ready') from exc
+            raise (getattr(self, 'wait_error', None) or CrawlError(self.error or 'page_not_ready')) from exc
 
     def snapshot(self) -> PageSnapshot:
         if self.error:
-            raise CrawlError(self.error)
+            raise getattr(self, 'wait_error', None) or CrawlError(self.error)
         if not self.page or self.page.is_closed():
             raise CrawlError('browser_closed')
         url = self.page.url
@@ -242,6 +249,7 @@ class PlaywrightBackend:
 
     def next_page(self) -> bool:
         self.auth_mode, self.error, self.redirects = False, None, 0
+        self.wait_error = None
         button = self._visible(self.adapter.next_selectors)
         if not button or button.get_attribute('aria-disabled') == 'true' or 'disabled' in (button.get_attribute('class') or '').split():
             return False
@@ -258,6 +266,7 @@ class PlaywrightBackend:
 
     def collection_mode(self):
         self.auth_mode, self.error = False, None
+        self.wait_error = None
 
     def pump(self):
         # Keeps a visible browser responsive while waiting for manual assistance.

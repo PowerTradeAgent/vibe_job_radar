@@ -1,7 +1,7 @@
 """Actual browser verifies existing report and improved failure UI; fixture upstream.
 
 Real public GET is separately exercised by check_live_public_example.py --live.
-The main HTTP server is unchanged: no new password or remote-target endpoints.
+The local server adds only consent-based task handoff endpoints; no password or arbitrary remote-target endpoints.
 """
 import contextlib
 import io
@@ -20,6 +20,73 @@ from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import Workspace
 from vibe_job_radar.public_example import JOB_ID, SOURCE_URL
 from vibe_job_radar.network import SafeHTTP
+from vibe_job_radar.guided.contracts import PageSnapshot
+
+
+
+class HandoffFixtureBrowser:
+    """Artificial source boundary for the actual local UI/browser acceptance."""
+    opened = []
+    def __init__(self, *args): pass
+    def open(self, url, **kwargs):
+        self.opened.append(url)
+        return PageSnapshot(url, '<h1>AI架构师</h1><div class="job-sec-text">'
+                            '人工验收夹具，不是市场数据。要求熟练使用 Cursor 辅助开发，编写单元测试并进行代码审查。'
+                            '</div>')
+    def pump(self): pass
+    def close(self): pass
+
+
+def local_query_journey(pw, options, result, out):
+    """Real local UI, fixture upstream: no operator server/configuration."""
+    from playwright.sync_api import expect
+    from vibe_job_radar.local_public import API_URL
+    board={'jobs':[{'id':880000+i,'absolute_url':f'https://job-boards.greenhouse.io/anthropic/jobs/{880000+i}',
+            'title':f'Architect FIXTURE {i}', 'location':{'name':'TEST ONLY'},
+            'content':'<p>ARTIFICIAL LOCAL QUERY FIXTURE — NOT MARKET DATA.</p><p>'
+                      'Use Cursor for AI-assisted coding. Review generated code, write comprehensive unit tests, '
+                      'and design dependable software. This is a controlled test, not a vacancy.</p>'}
+            for i in range(21)],'meta':{'total':21}}
+    with tempfile.TemporaryDirectory() as tmp:
+        server=LocalServer(Workspace(tmp))
+        thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);thread.start()
+        try:
+            with patch.object(SafeHTTP,'json',return_value=board) as source:
+                browser=pw.chromium.launch(**options)
+                context=browser.new_context(viewport={'width':1360,'height':1000})
+                context.route('**/*',lambda route:route.continue_() if route.request.url.startswith(server.origin+'/') else route.abort())
+                page=context.new_page();page.on('pageerror',lambda error:result['page_errors'].append(str(error)))
+                page.goto(server.entry_url)
+                expect(page.locator('#public-service-status')).to_contain_text('默认在本机直接获取')
+                expect(page.locator('#public-search-button')).to_be_enabled()
+                source.assert_not_called()
+                page.locator('#public-search [name=query]').fill('Architect')
+                page.locator('#public-search-button').click()
+                source.assert_not_called()  # Browser form requires explicit consent.
+                page.locator('#public-search [name=consent]').check()
+                page.locator('#public-search-button').click()
+                expect(page.locator('#public-status')).to_contain_text('本页 20 条',timeout=30000)
+                expect(page.locator('#public-status')).to_contain_text('匹配 21 条')
+                expect(page.locator('#public-next')).to_be_visible()
+                first=server.public_tasks.state()['task']
+                assert first['report_id'] and first['next_cursor'] and first['execution_mode']=='local_direct'
+                page.locator('#public-next').click()
+                expect(page.locator('#public-status')).to_contain_text('本页 1 条',timeout=30000)
+                expect(page.locator('#public-next')).to_be_hidden()
+                second=server.public_tasks.state()['task']
+                assert second['report_id']!=first['report_id'] and second['cache_reused']
+                source.assert_called_once_with(API_URL)
+                page.reload()
+                expect(page.locator('#public-status')).to_contain_text('本页 1 条')
+                source.assert_called_once_with(API_URL)
+                page.set_viewport_size({'width':390,'height':844})
+                assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+                page.screenshot(path=str(out/'local-public-query.png'),full_page=True)
+                assert not result['page_errors']
+                result['checks'].append('default local query needs no own server: consent -> one fixed fixture GET -> 20/1 local pages -> separate reports; reload does not fetch; no private query upload')
+                browser.close()
+        finally:
+            server.shutdown();server.server_close();thread.join(timeout=5)
 
 
 def main():
@@ -38,6 +105,8 @@ def main():
             assert source.call_count==1
         result['checks'].append('user command saves one full record/report; repeat command visibly caches without extra upstream GET')
         server=LocalServer(Workspace(tmp))
+        server.guided.factory=HandoffFixtureBrowser
+        HandoffFixtureBrowser.opened=[]
         thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);thread.start()
         try:
             task=server.collector.start({'mode':'urls','platforms':['boss'],'permit_platforms':['boss'],
@@ -71,11 +140,36 @@ def main():
                 expect(page.locator('#collect-progress')).to_contain_text('无浏览器登录会话')
                 result['checks'].append('historical unknown redirect is distinguished from an unexecuted budget item')
                 page.screenshot(path=str(out/'redirect-guidance.png'),full_page=True)
+                page.get_by_role('button',name='将未完成链接转交浏览器（先预览，不联网）',exact=True).click()
+                expect(page.locator('#collect-result')).to_contain_text('原HTTP正文尝试 1/1，剩余 0')
+                assert not server.guided.state()['jobs']
+                assert not HandoffFixtureBrowser.opened
+                page.once('dialog',lambda dialog:dialog.dismiss())
+                page.get_by_role('button',name='确认转交并继续',exact=True).click()
+                assert not server.guided.state()['jobs']
+                page.once('dialog',lambda dialog:dialog.accept())
+                page.get_by_role('button',name='确认转交并继续',exact=True).click()
+                page.wait_for_url(server.origin+'/guided?task=*')
+                expect(page.locator('#task-status')).to_contain_text('批次结束',timeout=15000)
+                child=server.guided.state()['jobs'][0]
+                assert page.locator('#task').input_value()==child['id']
+                assert child['report_id'] and child['handoff']['parent_id']==task['id']
+                assert HandoffFixtureBrowser.opened==[task['details'][0]['url']]
+                assert server.collector._load(task['id'])['detail_attempts']==1
+                result['checks'].append('HTTP failure preview performs no network; cancel creates nothing; confirmation transfers exact failed URL, preserves budget and roles, produces isolated report in selected browser task')
+                page.goto(server.origin+'/advanced');page.locator('#collect-load').click()
+                page.get_by_role('button',name='将未完成链接转交浏览器（先预览，不联网）',exact=True).click()
+                expect(page.get_by_role('link',name='继续已保存的浏览器任务（不重复创建）',exact=True)).to_be_visible()
+                assert len(server.guided.state()['jobs'])==1 and len(HandoffFixtureBrowser.opened)==1
+                result['checks'].append('repeat preview points to persisted browser task without re-requesting successful records')
+                page.screenshot(path=str(out/'handoff-completed.png'),full_page=True)
                 page.set_viewport_size({'width':390,'height':844})
                 assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
                 assert not result['page_errors']
                 result['checks'].append('no page-level overflow or JavaScript errors')
-                result['success']=True;browser.close()
+                browser.close()
+                local_query_journey(pw,options,result,out)
+                result['success']=True
         finally:
             server.shutdown();server.server_close();thread.join(timeout=5)
             (out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
