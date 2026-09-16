@@ -9,6 +9,7 @@ import copy
 import hashlib
 import importlib.metadata
 import json
+import math
 import queue
 import re
 import subprocess
@@ -62,6 +63,9 @@ MESSAGES = {
     'cooldown': '该站点仍处于冷却期。新建任务也不能绕过，请稍后重新操作。',
     'hourly_limit': '本工作区该站点的小时配额已用完。请稍后再操作，不要新建任务试图提速。',
     'daily_limit': '本工作区该站点的每日配额已用完。已有数据仍可分析。',
+    'publisher_wait': '该来源要求降低访问频率；正在等待，已有进度保留，可以暂停或停止。',
+    'rate_storage_error': '限频记录无法安全读取或写入，已停止联网；不会重置配额后继续。',
+    'publisher_policy_invalid': '发布方限频规则无法安全处理，已保留进度并停止自动访问。',
     'rate_wait': '正在等待安全间隔；不是卡死。可以暂停或停止。',
     'clock_rollback': '系统时钟回拨，限频保护暂停了请求。请先校准本机时间。',
     'structure_changed': '页面没有可确认的完整职位容器；未把整页/推荐职位冒充正文。可在基础页粘贴获准正文。',
@@ -162,6 +166,9 @@ class GuidedService:
                 if item['status'] in {'queued', 'running'} and item['id'] != self._active:
                     item.update(status='interrupted', code='interrupted', message=MESSAGES['interrupted'])
                 item['browser_open'] = item['id'] in self._backends
+                item['automatic_resume_available'] = (item.get('auto_resume', False)
+                                                      and item['browser_open']
+                                                      and item['status'] == 'waiting_rate')
                 jobs.append(item)
             return {'jobs': jobs, 'busy': self._busy, 'active': self._active,
                     'sites': self.registry.describe(), 'limits': asdict(self.ledger.limits),
@@ -242,7 +249,8 @@ class GuidedService:
         with self._lock:
             if self._busy:
                 raise InputError('当前动作尚未结束，请先暂停或等待。')
-            self._save(state, 'opening' if action in {'search','login'} else state['code'], status='queued')
+            self._save(state, 'opening' if action in {'search','login'} else state['code'],
+                       status='queued', auto_resume=False, next_allowed_at=None)
             self._submit(action, ident, secret)
         return {'id': ident, 'queued': True}
 
@@ -451,11 +459,37 @@ class GuidedService:
             else:
                 self._gather(state,backend,adapter,navigate=action=='resume')
 
+    def _resume_due(self):
+        """Resume only safe read actions in a still-owned browser session.
+
+        Restarted processes preserve the due time and selection, but require one
+        user resume/login because browser credentials intentionally aren't saved.
+        Never replay login POSTs or repeat a pagination click automatically.
+        """
+        with self._lock:
+            if self._busy or self._shutdown.is_set():
+                return
+            for ident in list(self._backends):
+                try:
+                    state = self._load(ident)
+                    due = state.get('next_allowed_at')
+                    action = state.get('retry_action')
+                    if (state['status'] == 'waiting_rate' and state.get('auto_resume')
+                            and action in {'search', 'capture', 'collect', 'resume'}
+                            and isinstance(due, (int, float)) and math.isfinite(due)
+                            and due <= self.ledger.clock()):
+                        self._save(state, status='queued', auto_resume=False, next_allowed_at=None)
+                        self._submit(action, ident)
+                        return
+                except (InputError, OSError, ValueError):
+                    continue
+
     def _worker(self):
         while not self._shutdown.is_set():
             try:
                 action, ident, secret = self._queue.get(timeout=0.1)
             except queue.Empty:
+                self._resume_due()
                 for backend in list(self._backends.values()):
                     try: backend.pump()
                     except Exception: pass
@@ -492,7 +526,19 @@ class GuidedService:
                             if isinstance(exc, BrowserStartupError):
                                 self._browser_health = exc.report
                                 state['startup_diagnostic'] = exc.report
-                            self._save(state,code,status='paused' if code=='paused' else 'waiting_manual')
+                            if isinstance(exc, RateLimit) and exc.next_allowed_at is not None:
+                                backend = self._backends.get(ident)
+                                safe = (action in {'search', 'capture', 'collect', 'resume'}
+                                        and not getattr(backend, 'auth_mode', False)
+                                        and code != 'clock_rollback')
+                                self._save(state, code, status='waiting_rate',
+                                           wait_seconds=round(exc.wait, 1),
+                                           next_allowed_at=exc.next_allowed_at,
+                                           retry_action=action, auto_resume=safe)
+                                self._cancel.set()  # No background browser requests during deferral.
+                            else:
+                                self._save(state,code,status='paused' if code=='paused' else 'waiting_manual',
+                                           auto_resume=False, next_allowed_at=None)
                     except Exception:
                         pass
             finally:

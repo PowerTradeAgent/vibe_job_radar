@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import http.client
 import ipaddress
+import math
 import socket
 import ssl
 import threading
@@ -48,21 +49,27 @@ def diagnose_host(host: str) -> dict:
 class PinnedTransport:
     """One instance per browser session; ledger limits are shared across sessions."""
     def __init__(self, adapter, ledger: RateLedger, cancelled: threading.Event,
-                 progress=lambda *_: None):
+                 progress=lambda *_: None, *, max_inline_wait=30):
         self.adapter, self.ledger, self.cancelled, self.progress = adapter, ledger, cancelled, progress
         self.domains = set((*adapter.domains, *adapter.resource_domains))
+        if (isinstance(max_inline_wait, bool) or not isinstance(max_inline_wait, (int, float))
+                or not math.isfinite(max_inline_wait) or not 0 <= max_inline_wait <= 60):
+            raise ValueError('invalid inline wait budget')
+        self.max_inline_wait = max_inline_wait
         self.robots = {}
         self.blocked = set()
+        self.retry_until = {}
 
-    def reserve(self, kind: str) -> None:
+    def reserve(self, kind: str, *, origin=None) -> None:
+        deadline = time.monotonic() + self.max_inline_wait
         while not self.cancelled.is_set():
             try:
-                self.ledger.reserve(self.adapter.key, kind)
+                self.ledger.reserve(self.adapter.key, kind, origin=origin)
                 return
             except RateLimit as exc:
-                if exc.code != 'rate_wait' or exc.wait > 60:
-                    raise CrawlError(exc.code) from exc
-                self.progress('rate_wait', round(exc.wait, 1))
+                if exc.code not in {'rate_wait', 'publisher_wait'} or exc.wait > deadline-time.monotonic():
+                    raise  # Preserve the timestamp for durable task recovery.
+                self.progress(exc.code, round(exc.wait, 1))
                 if self.cancelled.wait(min(exc.wait, 1)):
                     break
         raise CrawlError('paused')
@@ -72,9 +79,15 @@ class PinnedTransport:
             host, ip, target = validate_public_url(url, self.domains, all_addresses=True)
         except FetchError as exc:
             raise CrawlError(exc.code) from exc
+        if host in self.retry_until and self.ledger.clock() >= self.retry_until[host]:
+            self.retry_until.pop(host)
+            self.blocked.discard(host)
         if host in self.blocked:
+            if host in self.retry_until:
+                due = self.retry_until[host]
+                raise RateLimit(due-self.ledger.clock(), 'cooldown', next_allowed_at=due)
             raise CrawlError('site_stopped')
-        self.reserve('request')
+        self.reserve('request', origin='https://' + host)
         if body and len(body) > 1_000_000:
             raise CrawlError('request_too_large')
         try:
@@ -94,7 +107,11 @@ class PinnedTransport:
             if response.status in {401, 403, 429}:
                 if required or response.status == 429:
                     self.blocked.add(host)
-                    self.ledger.cool(self.adapter.key, self._retry_seconds(metadata.get('retry-after', '')))
+                    delay = self._retry_seconds(metadata.get('retry-after', ''))
+                    self.ledger.cool(self.adapter.key, delay)
+                    if response.status == 429:
+                        self.retry_until[host] = self.ledger.clock() + delay
+                        raise RateLimit(delay, 'http_429', next_allowed_at=self.retry_until[host])
                 raise CrawlError(f'http_{response.status}')
             content = response.read(5_000_001)
             if len(content) > 5_000_000:
@@ -142,10 +159,9 @@ class PinnedTransport:
             raise CrawlError('robots_denied')
         delay = parser.crawl_delay(USER_AGENT) or 0
         rate = parser.request_rate(USER_AGENT)
-        if rate and rate.requests:
-            delay = max(delay, rate.seconds / rate.requests)
-        if delay > self.ledger.limits.page_interval:
-            raise CrawlError('publisher_delay_exceeds_policy')
+        self.ledger.set_publisher(self.adapter.key, origin, delay=delay,
+                                  requests=rate.requests if rate else None,
+                                  seconds=rate.seconds if rate else None)
 
     def allowed_resource(self, url: str) -> bool:
         p = urlsplit(url)

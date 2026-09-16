@@ -5,7 +5,7 @@ if (token) sessionStorage.setItem('radar-session', token);
 if (location.hash) history.replaceState(null,'',location.pathname);
 let state=null, current=null, selecting=new Set(), loadedId='', requesting=false, sticky='';
 const installationNames={not_started:'尚未运行安装',installing:'正在安装',installed:'安装并启动验证成功',installed_not_ready:'安装命令成功，但启动检查失败',dependency_install_failed:'安装失败',dependency_install_timeout:'安装超时'};
-const statusNames={queued:'准备中',running:'执行中',ready:'可以选择岗位',waiting_manual:'需要你处理',paused:'已暂停',completed:'批次结束',stopped:'已停止',interrupted:'上次服务已退出'};
+const statusNames={queued:'准备中',running:'执行中',ready:'可以选择岗位',waiting_rate:'按来源要求等待',waiting_manual:'需要你处理',paused:'已暂停',completed:'批次结束',stopped:'已停止',interrupted:'上次服务已退出'};
 async function api(path,data){const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:{'X-Radar-Token':token,...(data===undefined?{}:{'Content-Type':'application/json'})},body:data===undefined?undefined:JSON.stringify(data),cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'操作失败');return result;}
 function note(text){$('busy').textContent=text;}
 async function act(fn){if(requesting)return;requesting=true;sticky='';try{await fn();await refresh();}catch(e){sticky=e.message;note(sticky);}finally{requesting=false;}}
@@ -22,8 +22,9 @@ function render(){
  $('limits').textContent=`服务端硬限制：页面导航至少 ${state.limits.page_interval} 秒，最多 ${state.limits.pages_hour} 次/小时；经桥接的 HTTP 请求至少 ${state.limits.request_interval} 秒，最多 ${state.limits.requests_hour} 次/小时。不同任务共享配额，不能从界面提高。`;
  options($('task'),state.jobs.map(j=>[j.id,`${j.platform} · ${j.keyword} · ${statusNames[j.status]||j.status}`]));
  current=state.jobs.find(j=>j.id===$('task').value)||null;
- if(current&&loadedId!==current.id){selecting.clear();loadedId=current.id;}
+ if(current&&loadedId!==current.id){selecting=new Set(current.selection||[]);loadedId=current.id;}
  if(current){$('task-status').textContent=`${statusNames[current.status]||current.status}：${current.message}`;
+ if(current.status==='waiting_rate'&&current.next_allowed_at){const remaining=Math.max(0,Math.ceil(current.next_allowed_at-Date.now()/1000));$('task-status').textContent+=`\n下次允许时间：${new Date(current.next_allowed_at*1000).toLocaleString()}（约 ${remaining} 秒）。${current.automatic_resume_available?'保留会话，到时自动继续。':'会话已退出或此动作需确认，届时点击继续；不必重填条件。'}`;}
  $('audit').textContent=JSON.stringify(current,null,2);renderCards();
  $('result').replaceChildren(document.createTextNode(`本批已保存 ${current.cards.filter(c=>c.status==='ok').length} 个岗位；发现 ${current.cards.length} 个候选链接。`));
  if(current.report_id){for(const [file,label] of [['requirements_zh.csv','下载岗位要求 CSV'],['descriptions.md','下载描述模板']]){const b=document.createElement('button');b.className='secondary';b.textContent=label;const id=current.report_id;b.onclick=()=>act(()=>downloadReport(id,file));$('result').append(b);}const a=document.createElement('a');a.href='/advanced';a.textContent=' 进入个人证据中心';$('result').append(a);}
