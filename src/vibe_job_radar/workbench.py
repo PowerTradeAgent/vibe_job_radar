@@ -23,19 +23,23 @@ from .evidence_ui import Conflict, EvidenceService
 from .public_tasks import PublicTasks
 
 MAX_BODY = 2_000_000
+_DEFAULT_PUBLIC_CLIENT = object()
 
 
 class LocalServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self, workspace: Workspace, port: int = 0, *, public_client=None):
+    def __init__(self, workspace: Workspace, port: int = 0, *, public_client=_DEFAULT_PUBLIC_CLIENT):
         self.workspace = workspace
         self.collector = Collector(workspace)
         self.guidance = CollectionGuidance(workspace)
         self.evidence = EvidenceService(workspace)
         self.guided = GuidedService(workspace)
         self.handoff = CollectionHandoff(self.collector, self.guided)
+        if public_client is _DEFAULT_PUBLIC_CLIENT:
+            from .local_public import LocalPublicDataClient
+            public_client = LocalPublicDataClient(workspace)
         self.public_tasks = PublicTasks(workspace, hybrid_client=public_client)
         self.token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()

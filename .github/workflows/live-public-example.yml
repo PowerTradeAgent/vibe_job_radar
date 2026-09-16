@@ -3,6 +3,9 @@ on:
   pull_request:
     paths:
       - 'src/vibe_job_radar/public_example.py'
+      - 'src/vibe_job_radar/local_public.py'
+      - 'src/vibe_job_radar/public_contract.py'
+      - 'scripts/check_live_local_public.py'
       - 'src/vibe_job_radar/network.py'
       - 'src/vibe_job_radar/redirect_policy.py'
       - 'scripts/check_live_public_example.py'
@@ -21,6 +24,10 @@ jobs:
           python-version: '3.12'
       - name: One actual public Greenhouse GET, no Key, no browser
         run: python scripts/check_live_public_example.py --live
+      - name: One local-direct board GET after conservative spacing
+        run: |
+          python -c "import time; time.sleep(31)"
+          python scripts/check_live_local_public.py --live
       - name: Save only metadata and counts, not third-party full text
         if: always()
         uses: actions/upload-artifact@v4

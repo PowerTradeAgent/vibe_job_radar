@@ -155,18 +155,27 @@ else refresh().catch((error) => notice(error.message));
 
 
 // Public tasks poll LOCAL state only. Loading this page never queries a source.
-let publicPolling = false, publicReport = '';
+let publicPolling = false, publicReport = '', publicNextQuery = null;
 async function publicState() {
   const result = await request('/api/public/state');
   const task = result.task;
   $('public-status').textContent = task.message || '';
-  $('public-service-status').textContent = result.hybrid_service_configured
-    ? '使用已配置公开服务；仅发送确认的查询字段。'
-    : '混合服务核心已接入，但产品侧服务尚未配置上线；公开案例和本地采集仍可使用。';
+  const local = result.execution_mode === 'local_direct';
+  $('public-service-status').textContent = local
+    ? '默认在本机直接获取公开招聘，查询词和地区在本机筛选；无需产品服务器、服务地址或 Key。'
+    : (result.query_available ? '使用操作方已配置的可选公开服务；仅发送确认的查询字段。'
+                             : '此实例已停用公开查询；公开案例和本地采集仍可使用。');
+  $('public-consent-text').textContent = result.privacy;
+  $('public-search-button').textContent = local ? '获取并在本机筛选' : '查询所选公开来源';
   $('public-network').textContent = JSON.stringify(result.network_policy, null, 2);
   const busy = ['queued', 'running'].includes(task.status);
   $('public-example').disabled = busy;
-  $('public-search-button').disabled = busy || !result.hybrid_service_configured;
+  $('public-search-button').disabled = busy || !result.query_available;
+  publicNextQuery = task.status === 'completed' && task.next_cursor
+    ? {...task.query, cursor: task.next_cursor} : null;
+  $('public-next').hidden = !publicNextQuery;
+  $('public-next').disabled = busy;
+  $('public-next').textContent = local ? '读取下一页（本地缓存）' : '确认获取下一页';
   if (!$('public-source').options.length) for (const source of result.sources) {
     const option = document.createElement('option'); option.value = source.id; option.textContent = source.label;
     $('public-source').append(option);
@@ -204,6 +213,12 @@ $('public-search').addEventListener('submit', async event => {
     query: {query: form.elements.query.value, region: form.elements.region.value,
             source_scope: [form.elements.source.value], limit: 20}
   }); });
+  await watchPublic();
+});
+$('public-next').addEventListener('click', async () => {
+  if (!publicNextQuery) return;
+  const query = {...publicNextQuery};
+  await operation(async () => { await request('/api/public/search', {consent: true, query}); });
   await watchPublic();
 });
 if (token) watchPublic();

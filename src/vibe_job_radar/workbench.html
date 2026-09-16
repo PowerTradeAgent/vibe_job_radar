@@ -13,11 +13,13 @@
 <p>免账号、免 Key、免采集浏览器。从官方公开接口获取一条 Anthropic Technical Architect 岗位并在本机生成报告。来源可能下架；它不是 BOSS 数据，也不是合成演示。</p>
 <button id="public-example" type="button">联网获取真实公开案例</button>
 <p id="public-status" role="status" aria-live="polite">点击确认前不联网。登录态、简历、个人证据和私人报告保留本地。</p>
-<details><summary>可选混合服务与网络状态</summary><p id="public-service-status"></p><pre id="public-network"></pre>
-<form id="public-search"><label>查询词<input name="query" maxlength="200" required placeholder="岗位或领域，不要填写个人资料"></label>
+<details open><summary>按岗位查询公开来源（默认本机运行，无需自建服务器）</summary><p id="public-service-status"></p><details><summary>高级网络诊断（只读）</summary><pre id="public-network"></pre></details>
+<form id="public-search"><label>查询词<input name="query" maxlength="200" required placeholder="例如 Architect、Engineer；按原文关键词匹配"></label>
 <label>地区<input name="region" maxlength="100"></label><label>来源<select id="public-source" name="source" required></select></label>
-<label class="check"><input name="consent" type="checkbox" required>同意仅向已配置公开服务发送查询词、地区和所选来源，不含个人材料。</label>
-<button id="public-search-button" type="submit" disabled>查询已配置公开服务</button></form>
+<label class="check"><input name="consent" type="checkbox" required><span id="public-consent-text">同意本机请求所选公开来源，查询词和地区仅在本机筛选，不上传个人材料。</span></label>
+<button id="public-search-button" type="submit" disabled>获取并在本机筛选</button></form>
+<button id="public-next" type="button" hidden>读取下一页（本地缓存）</button>
+<p class="muted">默认来源仅为 Anthropic 公开招聘，不代表全市场，也不替代指定招聘平台。筛选按原文关键词，不推断远程资格。来源时间与缓存状态会明确标注。</p>
 </details></section><p><a href="/guided">新手推荐：选平台 → 找岗位 → 勾选采集（无需手工整理 URL）</a></p>
 <header><div class="tag">EVIDENCE FIRST / LOCAL WORKSPACE</div><h1>招聘要求 → 逐条证据 → 可量化描述</h1>
 <p class="intro">先用演示熟悉输出，再粘贴你有权处理的真实职位文本。离线分析不需要 API Key，也不需要把招聘平台账号交给本项目。</p>

@@ -37,6 +37,58 @@ class HandoffFixtureBrowser:
     def close(self): pass
 
 
+def local_query_journey(pw, options, result, out):
+    """Real local UI, fixture upstream: no operator server/configuration."""
+    from playwright.sync_api import expect
+    from vibe_job_radar.local_public import API_URL
+    board={'jobs':[{'id':880000+i,'absolute_url':f'https://job-boards.greenhouse.io/anthropic/jobs/{880000+i}',
+            'title':f'Architect FIXTURE {i}', 'location':{'name':'TEST ONLY'},
+            'content':'<p>ARTIFICIAL LOCAL QUERY FIXTURE — NOT MARKET DATA.</p><p>'
+                      'Use Cursor for AI-assisted coding. Review generated code, write comprehensive unit tests, '
+                      'and design dependable software. This is a controlled test, not a vacancy.</p>'}
+            for i in range(21)],'meta':{'total':21}}
+    with tempfile.TemporaryDirectory() as tmp:
+        server=LocalServer(Workspace(tmp))
+        thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);thread.start()
+        try:
+            with patch.object(SafeHTTP,'json',return_value=board) as source:
+                browser=pw.chromium.launch(**options)
+                context=browser.new_context(viewport={'width':1360,'height':1000})
+                context.route('**/*',lambda route:route.continue_() if route.request.url.startswith(server.origin+'/') else route.abort())
+                page=context.new_page();page.on('pageerror',lambda error:result['page_errors'].append(str(error)))
+                page.goto(server.entry_url)
+                expect(page.locator('#public-service-status')).to_contain_text('默认在本机直接获取')
+                expect(page.locator('#public-search-button')).to_be_enabled()
+                source.assert_not_called()
+                page.locator('#public-search [name=query]').fill('Architect')
+                page.locator('#public-search-button').click()
+                source.assert_not_called()  # Browser form requires explicit consent.
+                page.locator('#public-search [name=consent]').check()
+                page.locator('#public-search-button').click()
+                expect(page.locator('#public-status')).to_contain_text('本页 20 条',timeout=30000)
+                expect(page.locator('#public-status')).to_contain_text('匹配 21 条')
+                expect(page.locator('#public-next')).to_be_visible()
+                first=server.public_tasks.state()['task']
+                assert first['report_id'] and first['next_cursor'] and first['execution_mode']=='local_direct'
+                page.locator('#public-next').click()
+                expect(page.locator('#public-status')).to_contain_text('本页 1 条',timeout=30000)
+                expect(page.locator('#public-next')).to_be_hidden()
+                second=server.public_tasks.state()['task']
+                assert second['report_id']!=first['report_id'] and second['cache_reused']
+                source.assert_called_once_with(API_URL)
+                page.reload()
+                expect(page.locator('#public-status')).to_contain_text('本页 1 条')
+                source.assert_called_once_with(API_URL)
+                page.set_viewport_size({'width':390,'height':844})
+                assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
+                page.screenshot(path=str(out/'local-public-query.png'),full_page=True)
+                assert not result['page_errors']
+                result['checks'].append('default local query needs no own server: consent -> one fixed fixture GET -> 20/1 local pages -> separate reports; reload does not fetch; no private query upload')
+                browser.close()
+        finally:
+            server.shutdown();server.server_close();thread.join(timeout=5)
+
+
 def main():
     from playwright.sync_api import sync_playwright, expect
     out=ROOT/'browser-acceptance'/'recovery';out.mkdir(parents=True,exist_ok=True)
@@ -115,7 +167,9 @@ def main():
                 assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
                 assert not result['page_errors']
                 result['checks'].append('no page-level overflow or JavaScript errors')
-                result['success']=True;browser.close()
+                browser.close()
+                local_query_journey(pw,options,result,out)
+                result['success']=True
         finally:
             server.shutdown();server.server_close();thread.join(timeout=5)
             (out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')

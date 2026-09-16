@@ -83,12 +83,13 @@ class PublicSource:
     domains: tuple[str, ...]
     contract: str
     distribution_approved: bool = False
+    local_access_approved: bool = False
 
     def __post_init__(self):
         if not isinstance(self.key, str) or not ID.fullmatch(self.key):
             raise ContractError('public_source_invalid')
         text(self.label, 200); text(self.contract, 2000)
-        if not isinstance(self.domains, tuple) or not self.domains or type(self.distribution_approved) is not bool:
+        if not isinstance(self.domains, tuple) or not self.domains or type(self.distribution_approved) is not bool or type(self.local_access_approved) is not bool:
             raise ContractError('public_source_invalid')
         for host in self.domains:
             if (not isinstance(host, str) or len(host) > 253 or '.' not in host
@@ -117,13 +118,18 @@ class PublicSource:
             raise ContractError('public_source_mismatch') from exc
 
 
-def validate_batch(value, query: PublicQuery, registry: dict[str, PublicSource]):
+def validate_batch(value, query: PublicQuery, registry: dict[str, PublicSource], *, access_mode='distribution'):
+    # Local research permission must never implicitly authorize redistribution.
+    # This selector is an internal code argument, NOT a query/response field.
+    if access_mode not in {'distribution', 'local'}:
+        raise ContractError('public_access_mode_invalid')
     if (not isinstance(value, dict) or set(value) != {'schema_version','jobs','next_cursor','generated_at'}
             or type(value['schema_version']) is not int or value['schema_version'] != 1
             or not isinstance(value['jobs'], list) or len(value['jobs']) > query.limit):
         raise ContractError()
     for source in query.source_scope:
-        if source not in registry or not registry[source].distribution_approved:
+        if source not in registry or not (registry[source].distribution_approved if access_mode == 'distribution'
+                                         else registry[source].local_access_approved):
             raise ContractError('public_source_unapproved')
     text(value['next_cursor'],1024,empty=True)
     if value['next_cursor'] and not re.fullmatch(r'[0-9a-zA-Z_.-]+',value['next_cursor']):

@@ -49,13 +49,19 @@ class PublicTasks:
             with writer_lock(self.root):
                 atomic_json(self.path,self._state)
 
+    def mode(self):
+        return getattr(self.hybrid, 'execution_mode', 'remote_service') if self.hybrid else 'disabled'
+
     def state(self):
         with self._lock:
-            return {'task':copy.deepcopy(self._state),'hybrid_service_configured':self.hybrid is not None,
+            return {'task':copy.deepcopy(self._state),'hybrid_service_configured':self.mode() == 'remote_service',
+                    'query_available':self.hybrid is not None,'execution_mode':self.mode(),
                     'sources':[{'id':s.key,'label':s.label} for s in self.hybrid.registry.values()
-                               if s.distribution_approved] if self.hybrid else [],
+                               if (s.local_access_approved if self.mode() == 'local_direct' else s.distribution_approved)] if self.hybrid else [],
                     'network_policy':current_policy().describe(),
-                    'privacy':'只发送已确认的查询字段；登录态、简历、个人证据和私人报告不发送。'}
+                    'privacy':('本机请求固定公开接口，查询词和地区在本机筛选，不发给外部服务；个人材料和登录态不发送。'
+                               if self.mode() == 'local_direct' else
+                               '只发送已确认的查询字段；登录态、简历、个人证据和私人报告不发送。')}
 
     def start(self, data):
         if set(data)!={'consent'} or data['consent'] is not True:
@@ -64,10 +70,10 @@ class PublicTasks:
 
     def search(self, data):
         if set(data)!={'consent','query'} or data['consent'] is not True:
-            raise InputError('请确认把查询词、地区和来源范围发送给公开服务，不要包含个人资料。')
+            raise InputError('请确认按页面说明获取所选公开来源；不要包含个人资料。')
         query=PublicQuery.from_dict(data['query'])
         if self.hybrid is None:
-            raise InputError('公开数据服务尚未配置上线；本地案例、登录采集和已保存数据仍可使用。')
+            raise InputError('此运行实例已停用公开查询；本地案例、登录采集和已保存数据仍可使用。无需部署生产服务器。')
         self.hybrid._scope(query)
         return self._submit('search',query.payload())
 
@@ -93,7 +99,8 @@ class PublicTasks:
                 result=self._import(self.hybrid.search(query,consent=True),query)
             # Do not persist the report's full private rendering in task status.
             allowed={'success','message','code','report_id','source_url','collected_at','checked_at',
-                     'cache_reused','stale','refresh_error','network_requests_this_click','scope','source_scope'}
+                     'cache_reused','stale','refresh_error','network_requests_this_click','scope','source_scope',
+                     'next_cursor','matching_jobs','returned_jobs','available_jobs','execution_mode'}
             view={k:v for k,v in result.items() if k in allowed}
             self._save(**view,status='completed' if result.get('success') else 'failed')
         except Exception as exc:
@@ -107,7 +114,11 @@ class PublicTasks:
         summary={'success':True,'collected_at':min((j['collected_at'] for j in jobs),key=parse_time) if jobs else '',
                  'source_scope':list(query.source_scope),'cache_reused':result['cache_reused'],
                  'stale':result['stale'],'refresh_error':result['refresh_error'],
-                 'network_requests_this_click':result['network_requests'],'report_id':''}
+                 'network_requests_this_click':result['network_requests'],'report_id':'',
+                 'next_cursor':result['response']['next_cursor'],'execution_mode':self.mode()}
+        for key in ('matching_jobs','returned_jobs','available_jobs'):
+            if key in result:
+                summary[key]=result[key]
         if not records:
             return {**summary,'code':'public_empty','message':'所选来源中未取得匹配条目，不代表整个市场没有岗位。'}
         from .pipeline import analyze
@@ -134,7 +145,9 @@ class PublicTasks:
             manifest['output_files_sha256']['public_source.json']=hashlib.sha256((folder/'public_source.json').read_bytes()).hexdigest()
             atomic_json(folder/'run_manifest.json',manifest)
         message=('使用缓存结果生成本地报告，采集时间保持原值。' if result['cache_reused']
-                 else '已取得公开服务结果并生成本地报告；完整正文与摘要保持区分。')
+                 else '已取得所选公开来源结果并生成本地报告；完整正文与摘要保持区分。')
+        if self.mode() == 'local_direct':
+            message+=' 本机直取 Anthropic 公开招聘；本页 '+str(len(jobs))+' 条，筛选匹配 '+str(result.get('matching_jobs',len(jobs)))+' 条。'
         message+=' 最早的来源采集时间：'+summary['collected_at']+'。'
         if result['stale']:
             message+=' 刷新暂不可用，当前是过期缓存，不是实时结果。'

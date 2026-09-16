@@ -292,8 +292,9 @@ class PublicHTTPTests(unittest.TestCase):
         network.assert_not_called()
 
     def test_unconfigured_service_honestly_rejects_search(self):
+        self.server.public_tasks.hybrid=None  # Explicitly disabled instance, not the default local provider.
         code,_,body=self.call('/api/public/search',{'consent':True,'query':query().payload()})
-        self.assertEqual(code,400);self.assertIn('尚未配置',json.loads(body)['error'])
+        self.assertEqual(code,400);self.assertIn('已停用',json.loads(body)['error'])
 
     def test_configured_hybrid_query_reaches_gateway_and_isolated_local_report(self):
         gateway=PublicGateway(REGISTRY,[job(collected_at=utc_now())]);transport=Mock()
