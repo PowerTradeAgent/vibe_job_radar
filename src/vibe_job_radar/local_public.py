@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from .collection import writer_lock
 from .guided.rate import Limits, RateLedger, RateLimit
 from .html_parser import plain_text
+from .public_cache_guard import CacheFailureGuard
 from .network import FetchError, SafeHTTP
 from .public_contract import ContractError, PublicQuery, PublicSource, validate_batch
 from .utils import atomic_json
@@ -94,6 +95,7 @@ class LocalPublicDataClient:
         self.root = workspace.root / 'local_public'
         self.path = self.root / 'anthropic-board-v1.json'
         self.key_path = self.root / 'cursor.key'
+        self.failure_guard = CacheFailureGuard(self.root, API_URL)
         self._default_transport = transport is None
         self.client = transport or SafeHTTP({HOST}, timeout=15, max_bytes=MAX_BYTES, interval=2)
         self.ledger = None
@@ -201,7 +203,8 @@ class LocalPublicDataClient:
         with writer_lock(self.workspace.root):
             self._prepare()
             now = self.clock(); value = self._cached(now)
-            return self._select(query, value, now, cached=True) if value else None
+            return self._select(query, value, now, cached=True,
+                                error=self.failure_guard.read(now)) if value else None
 
     def search(self, query, *, consent=False):
         self._scope(query)
@@ -210,16 +213,21 @@ class LocalPublicDataClient:
         with writer_lock(self.workspace.root):
             self._prepare()
             now = self.clock(); cached = self._cached(now)
+            hard_failure = self.failure_guard.read(now)
             if query.cursor:
                 # Pagination never triggers another fetch or changes the snapshot.
                 if cached is None:
                     raise ContractError('public_cursor_invalid')
+                if hard_failure:
+                    raise FetchError(hard_failure)
                 return self._select(query, cached, now, cached=True)
-            if cached and now-cached['observed_at'] < 600:
+            if cached and now-cached['observed_at'] < 600 and not hard_failure:
                 return self._select(query, cached, now, cached=True)
             try:
                 self.ledger.reserve(SCOPE, 'request')
             except RateLimit as exc:
+                if hard_failure:
+                    raise FetchError(hard_failure) from None
                 if cached and exc.code != 'clock_rollback':
                     return self._select(query, cached, now, cached=True, error=exc.code)
                 raise
@@ -244,15 +252,24 @@ class LocalPublicDataClient:
                                'http_503', 'http_504', 'local_proxy_connection_failed',
                                'encrypted_dns_unavailable', 'encrypted_dns_timeout',
                                'encrypted_dns_cooldown', 'encrypted_dns_budget'}
+                if exc.code not in recoverable:
+                    self.failure_guard.record(exc.code, now)
+                elif hard_failure:
+                    raise FetchError(hard_failure) from None
                 if cached and exc.code in recoverable:
                     return self._select(query, cached, now, cached=True, requests=1, error=exc.code)
                 raise
-            jobs = parse_board(payload, now)
-            value = {'observed_at': now, 'api': API_URL, 'revision': revision(jobs), 'jobs': jobs}
-            self._validate_snapshot(value, now)
-            if len(json.dumps(value, ensure_ascii=False).encode('utf-8')) > MAX_BYTES:
-                raise ContractError('public_cache_invalid')
+            try:
+                jobs = parse_board(payload, now)
+                value = {'observed_at': now, 'api': API_URL, 'revision': revision(jobs), 'jobs': jobs}
+                self._validate_snapshot(value, now)
+                if len(json.dumps(value, ensure_ascii=False).encode('utf-8')) > MAX_BYTES:
+                    raise ContractError('public_cache_invalid')
+            except ContractError as exc:
+                self.failure_guard.record(exc.code, now)
+                raise
             if self.path.is_symlink():
                 raise InputError('缓存文件不能使用符号链接。')
             atomic_json(self.path, value)
+            self.failure_guard.clear()
             return self._select(query, value, now, cached=False, requests=1)

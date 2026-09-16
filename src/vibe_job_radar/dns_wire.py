@@ -7,6 +7,7 @@ connection target. RFC 1035 / 8484; no external package or network in this modul
 from __future__ import annotations
 
 import ipaddress
+import math
 import re
 import struct
 from dataclasses import dataclass
@@ -84,11 +85,16 @@ class Answer:
     addresses: tuple[str, ...]
     ttl: float
     canonical: str
+    # Cache policy may set ttl=0 while the answer's positive validity continues.
+    # None preserves the original three-argument internal/testing constructor.
+    valid_for: float | None = None
 
 
-def parse_answer(data: bytes, host: str, kind: int, *, age: int = 0) -> Answer:
+def parse_answer(data: bytes, host: str, kind: int, *, age: int = 0,
+                 elapsed: float = 0.0) -> Answer:
     if (not isinstance(data, bytes) or not 12 <= len(data) <= 65535
-            or kind not in (1, 28) or type(age) is not int or age < 0):
+            or kind not in (1, 28) or type(age) is not int or age < 0
+            or type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0):
         invalid()
     expected = hostname(host)
     ident, flags, qd, an, ns, ar = struct.unpack_from('!6H', data)
@@ -112,6 +118,10 @@ def parse_answer(data: bytes, host: str, kind: int, *, age: int = 0) -> Answer:
             invalid()
         rtype, rclass, ttl, length = struct.unpack_from('!HHIH', data, pos)
         pos += 10
+        # RFC 2181 section 8: high-bit TTLs are zero, not multi-decade leases.
+        # OPT overloads this field; retain it for the EDNS checks below.
+        if rtype != 41 and ttl & 0x80000000:
+            ttl = 0
         end = pos + length
         if end > len(data):
             invalid()
@@ -166,5 +176,12 @@ def parse_answer(data: bytes, host: str, kind: int, *, age: int = 0) -> Answer:
     if not addresses:
         ttls.append(min(negative_ttls, default=0))
     ttls.extend(ttl for _, _, ttl in addresses)
+    lifetime = min(ttls, default=0)
+    spent = age + elapsed
+    # A genuinely zero-TTL answer may serve this transaction, never the cache.
+    # A formerly positive TTL exhausted by transit/Age is *not* that exception.
+    if (lifetime > 0 and spent >= lifetime) or (lifetime == 0 and age > 0):
+        raise ResolutionError('encrypted_dns_expired_answer')
+    remaining = float(max(0, lifetime - spent))
     return Answer(tuple(dict.fromkeys(ip for _, ip, _ in addresses)),
-                  float(max(0, min(ttls, default=0) - age)), canonical)
+                  remaining, canonical, valid_for=remaining)

@@ -108,7 +108,10 @@ class WireTests(unittest.TestCase):
                 parse_answer(wire(flags=flags,records=[]),HOST,1)
 
     def test_zero_ttl_not_increased(self):
-        self.assertEqual(parse_answer(wire(),HOST,1,age=100).ttl,0)
+        raw=wire(records=[record(HOST,1,ipaddress.ip_address(IP4).packed,ttl=0)])
+        self.assertEqual(parse_answer(raw,HOST,1).ttl,0)
+        with self.assertRaisesRegex(ResolutionError,'expired_answer'):
+            parse_answer(wire(),HOST,1,age=100)
 
 
 class ResolverTests(unittest.TestCase):
@@ -116,7 +119,7 @@ class ResolverTests(unittest.TestCase):
         self.now=[100.0];self.r=PublicResolver(clock=lambda:self.now[0])
         self.p=NetworkPolicy(encrypted_dns=True,resolver=self.r)
         self.dns=patch('socket.getaddrinfo',return_value=fake_answers('198.18.0.42'));self.dns.start();self.addCleanup(self.dns.stop)
-        self.exchange=patch.object(self.r,'_exchange',side_effect=lambda h,k,p,d:Answer((IP4 if k==1 else IP6,),60,h))
+        self.exchange=patch.object(self.r,'_exchange',side_effect=lambda h,k,p,d,**kw:Answer((IP4 if k==1 else IP6,),60,h))
         self.ex=self.exchange.start();self.addCleanup(self.exchange.stop)
 
     def test_only_mapped_system_answers_trigger_opted_in_exchange(self):
@@ -171,7 +174,8 @@ class ResolverTests(unittest.TestCase):
     def test_failure_cooldown_and_no_partial_family_cache(self):
         self.ex.side_effect=[Answer((IP4,),60,HOST),ResolutionError('encrypted_dns_tls_failed')]
         with self.assertRaisesRegex(ResolutionError,'tls_failed'):self.r.resolve(HOST,self.p)
-        with self.assertRaisesRegex(ResolutionError,'cooldown'):self.r.resolve(HOST,self.p)
+        # The cooldown must retain a hard TLS cause, not enable stale job-cache fallback.
+        with self.assertRaisesRegex(ResolutionError,'tls_failed'):self.r.resolve(HOST,self.p)
         self.assertEqual(self.ex.call_count,2);self.assertEqual(self.r._cache,{})
 
     def test_clock_rollback_and_budget(self):
@@ -191,7 +195,7 @@ class ResolverTests(unittest.TestCase):
         with self.assertRaisesRegex(ResolutionError,'paused'):self.r.resolve(HOST,self.p,cancelled=event)
         self.ex.assert_not_called()
         event.clear()
-        def one(*args):event.set();return Answer((IP4,),60,HOST)
+        def one(*args,**kw):event.set();return Answer((IP4,),60,HOST)
         self.ex.side_effect=one
         with self.assertRaisesRegex(ResolutionError,'paused'):self.r.resolve(HOST,self.p,cancelled=event)
         self.assertEqual(self.ex.call_count,1)
@@ -236,7 +240,7 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(sum(x.cache_reused for x in values),1)
 
     def test_expiry_between_family_answers_is_not_usable(self):
-        def answer(h,k,p,d):
+        def answer(h,k,p,d,**kw):
             if k==28:self.now[0]+=2
             return Answer((IP4 if k==1 else IP6,),1,h)
         self.ex.side_effect=answer
@@ -249,7 +253,7 @@ class ResolverTests(unittest.TestCase):
         seen=[]
         response=Mock();response.status=200;response.getheaders.return_value=[];response.read.return_value=b'{}'
         connection=Mock();connection.getresponse.return_value=response
-        def answer(h,k,p,d):seen.append(self.now[0]);return Answer((IP4 if k==1 else IP6,),2,h)
+        def answer(h,k,p,d,**kw):seen.append(self.now[0]);return Answer((IP4 if k==1 else IP6,),2,h)
         self.ex.side_effect=answer
         with patch('vibe_job_radar.network.time.monotonic',side_effect=lambda:self.now[0]),patch('time.sleep',side_effect=lambda n:self.now.__setitem__(0,self.now[0]+n)),patch('vibe_job_radar.network.PinnedHTTPSConnection',return_value=connection):
             client.json('https://'+HOST+'/jobs')

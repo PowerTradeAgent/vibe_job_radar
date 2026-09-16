@@ -23,6 +23,11 @@ PROVIDER = 'cloudflare-doh-v1'
 DOH_HOST = 'cloudflare-dns.com'
 BOOTSTRAP = ('1.1.1.1', '1.0.0.1', '2606:4700:4700::1111', '2606:4700:4700::1001')
 FAKE_RANGE = ipaddress.ip_network('198.18.0.0/15')
+# Do not disclose special/private names to a public resolver. In particular,
+# RFC 7686 recommends a non-Tor application avoid ordinary DNS for .onion.
+PRIVATE_ZONES = ('localhost', 'local', 'internal', 'home.arpa', 'invalid',
+                 'test', 'example', 'onion')
+TRANSIENT_ERRORS = frozenset({'encrypted_dns_unavailable', 'encrypted_dns_timeout'})
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,7 @@ class PublicResolver:
         self._cache = {}
         self._lock = threading.Lock()
         self._cooldown = 0.0
+        self._cooldown_reason = 'encrypted_dns_cooldown'
         self._last_clock = None
         self._requests = []
 
@@ -53,6 +59,7 @@ class PublicResolver:
     def resolve(self, host, policy, *, timeout=10.0, cancelled=None):
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError('invalid resolution budget')
+        self._cancel(cancelled)
         try:
             literal = ipaddress.ip_address(host)
         except ValueError:
@@ -62,6 +69,8 @@ class PublicResolver:
                 raise ResolutionError('non_public_address')
             return ResolutionSnapshot((str(literal),), 'literal_public_ip', 0, policy.fingerprint)
         host = hostname(host)
+        if any(host == zone or host.endswith('.' + zone) for zone in PRIVATE_ZONES):
+            raise ResolutionError('non_public_address')
         self._cancel(cancelled)
         try:
             policy.for_host(host)  # A broken explicit proxy cannot leak DNS.
@@ -72,6 +81,7 @@ class PublicResolver:
             ips = tuple(ipaddress.ip_address(ip) for ip in raw)
         except (OSError, ValueError):
             raise ResolutionError('dns_error') from None
+        self._cancel(cancelled)
         if not ips or any('%' in ip for ip in raw):
             raise ResolutionError('non_public_address')
         if all(ip.is_global for ip in ips):
@@ -87,8 +97,6 @@ class PublicResolver:
             pass
         else:
             raise ResolutionError('non_public_address')
-        if host.endswith(('.localhost', '.local', '.internal', '.home.arpa', '.invalid', '.test', '.example')):
-            raise ResolutionError('non_public_address')
         self._permission()
         deadline = self.clock() + min(timeout, 10.0)
         while not self._lock.acquire(timeout=min(0.05, max(0.001, deadline-self.clock()))):
@@ -97,6 +105,9 @@ class PublicResolver:
                 raise ResolutionError('encrypted_dns_timeout')
         try:
             self._cancel(cancelled)
+            # The user may have revoked permission while this lookup waited for
+            # another lookup's lock. Never reuse its cached result on old consent.
+            self._permission()
             now = self.clock()
             if self._last_clock is not None and now < self._last_clock:
                 self._cache.clear()
@@ -107,7 +118,7 @@ class PublicResolver:
             if saved and now < saved.expires_at:
                 return replace(saved, cache_reused=True)
             if now < self._cooldown:
-                raise ResolutionError('encrypted_dns_cooldown')
+                raise ResolutionError(self._cooldown_reason)
             self._requests = [stamp for stamp in self._requests if now-stamp < 300]
             if len(self._requests) >= 60:
                 raise ResolutionError('encrypted_dns_budget')
@@ -120,7 +131,11 @@ class PublicResolver:
                     self._cancel(cancelled)
                     if self.clock() >= deadline:
                         raise ResolutionError('encrypted_dns_timeout')
-                    answer = self._exchange(host, kind, policy, deadline)
+                    answer = self._exchange(host, kind, policy, deadline, cancelled=cancelled)
+                    self._permission()
+                    self._cancel(cancelled)
+                    if self.clock() >= deadline:
+                        raise ResolutionError('encrypted_dns_timeout')
                     results.append((answer, self.clock()))
                 ips = tuple(dict.fromkeys(ip for answer, _ in results for ip in answer.addresses))
                 if not ips:
@@ -128,7 +143,11 @@ class PublicResolver:
                 now = self.clock()
                 if now < self._last_clock or any(now < at for _, at in results):
                     raise ResolutionError('encrypted_dns_clock_rollback')
-                if any(a.addresses and a.ttl > 0 and now-at >= a.ttl for a, at in results):
+                # A no-store directive forbids reuse, not expiry checks. Negative
+                # family answers also have to remain valid while the pair finishes.
+                if any((a.valid_for if a.valid_for is not None else a.ttl) > 0
+                       and now-at >= (a.valid_for if a.valid_for is not None else a.ttl)
+                       for a, at in results):
                     raise ResolutionError('encrypted_dns_expired_answer')
                 self._last_clock = now
                 ttl = min(300.0, *(max(0.0, a.ttl-(now-at)) for a, at in results))
@@ -136,11 +155,19 @@ class PublicResolver:
                 self._cache = {k: v for k, v in self._cache.items() if now < v.expires_at}
                 if len(self._cache) >= 256:
                     self._cache.pop(next(iter(self._cache)))
+                self._permission()
+                self._cancel(cancelled)
                 if ttl > 0:
                     self._cache[key] = snapshot
                 return snapshot
-            except ResolutionError:
-                self._cooldown = max(self._cooldown, self.clock()+30)
+            except ResolutionError as exc:
+                if exc.code not in {'paused', 'encrypted_dns_disabled'}:
+                    self._cooldown = max(self._cooldown, self.clock()+30)
+                    # Preserve hard failures across subsequent attempts. Relabelling
+                    # a certificate/private-answer error as temporary could allow
+                    # the job cache to conceal it on the user's second click.
+                    self._cooldown_reason = ('encrypted_dns_cooldown'
+                                             if exc.code in TRANSIENT_ERRORS else exc.code)
                 raise
         finally:
             self._lock.release()
@@ -159,7 +186,7 @@ class PublicResolver:
         if cancelled is not None and cancelled.is_set():
             raise ResolutionError('paused')
 
-    def _exchange(self, host, kind, policy, deadline) -> Answer:
+    def _exchange(self, host, kind, policy, deadline, *, cancelled=None) -> Answer:
         # Import lazily to keep codec and transport dependencies acyclic.
         from .network import FetchError, PinnedHTTPSConnection
         selected = policy.for_host(host)
@@ -169,22 +196,35 @@ class PublicResolver:
                         encrypted_dns=False, resolver=None)
         conn = None
         try:
+            self._permission()
+            self._cancel(cancelled)
             budget = max(0.001, deadline-self.clock())
             conn = PinnedHTTPSConnection(DOH_HOST, BOOTSTRAP, budget, network_policy=route)
             conn.connect()
             def remaining():
+                self._permission()
+                self._cancel(cancelled)
                 value = deadline-self.clock()
                 if value <= 0:
                     raise ResolutionError('encrypted_dns_timeout')
                 if conn.sock is not None:
                     conn.sock.settimeout(value)
             remaining()
+            started = self.clock()
             conn.request('POST', '/dns-query', body=query(host, kind), headers={
                 'Accept': 'application/dns-message', 'Content-Type': 'application/dns-message',
                 'Accept-Encoding': 'identity', 'User-Agent': 'VibeJobRadar-DNS/1'})
             remaining()
             response = conn.getresponse()
-            headers = {k.lower(): v for k, v in response.getheaders()}
+            headers = {}
+            for key, value in response.getheaders():
+                key = key.lower()
+                if key == 'cache-control':
+                    headers[key] = ','.join(filter(None, (headers.get(key), value)))
+                else:
+                    if key in headers and key in {'age', 'content-type', 'content-encoding'}:
+                        raise ResolutionError('encrypted_dns_invalid_response')
+                    headers[key] = value
             if response.status != 200:
                 if response.status == 429:
                     from .network import retry_after_seconds
@@ -207,13 +247,28 @@ class PublicResolver:
             age = headers.get('age','0')
             if not re.fullmatch(r'[0-9]{1,10}', age):
                 raise ResolutionError('encrypted_dns_invalid_response')
-            result = parse_answer(bytes(parts), host, kind, age=int(age))
+            elapsed = self.clock() - started
+            if elapsed < 0:
+                raise ResolutionError('encrypted_dns_clock_rollback')
+            result = parse_answer(bytes(parts), host, kind, age=int(age), elapsed=elapsed)
             cache = headers.get('cache-control','').lower()
-            if any(token in cache for token in ('no-store', 'no-cache')):
-                return replace(result, ttl=0)
-            max_age = re.search(r'(?:^|,)\s*max-age\s*=\s*"?(\d+)"?', cache)
-            if max_age:
-                return replace(result, ttl=min(result.ttl, max(0, int(max_age[1])-int(age))))
+            if len(cache) > 4096:
+                raise ResolutionError('encrypted_dns_invalid_response')
+            matches = re.findall(r'(?:^|,)\s*max-age\s*=\s*(?:"([0-9]{1,10})"|([0-9]{1,10}))\s*(?=,|$)', cache)
+            directives = re.findall(r'(?:^|,)\s*max-age\s*(?==|,|$)', cache)
+            if len(matches) != len(directives) or len(matches) > 1:
+                raise ResolutionError('encrypted_dns_invalid_response')
+            if matches:
+                limit = int(matches[0][0] or matches[0][1])
+                spent = int(age) + elapsed
+                if (limit > 0 and spent >= limit) or (limit == 0 and int(age) > 0):
+                    raise ResolutionError('encrypted_dns_expired_answer')
+                cache_ttl = max(0, limit - spent)
+                result = replace(result, ttl=min(result.ttl, cache_ttl),
+                                 valid_for=min(result.valid_for, cache_ttl)
+                                 if limit > 0 else result.valid_for)
+            if re.search(r'(?:^|,)\s*(?:no-store|no-cache)\s*(?==|,|$)', cache):
+                result = replace(result, ttl=0)
             return result
         except ResolutionError:
             raise
