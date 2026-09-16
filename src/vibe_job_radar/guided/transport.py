@@ -17,7 +17,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
 
-from ..network import FetchError, PinnedHTTPSConnection, USER_AGENT, validate_public_url
+from ..network import FetchError, PinnedHTTPSConnection, USER_AGENT, validate_public_url, validate_url_target
 from ..utils import domain_matches
 from ..network_policy import current_policy, use_policy
 from .contracts import CrawlError
@@ -78,9 +78,11 @@ class PinnedTransport:
 
     def fetch(self, url: str, method='GET', headers=None, body=None, *, required=True) -> WireResponse:
         try:
-            host, ip, target = validate_public_url(url, self.domains, all_addresses=True)
+            host, target = validate_url_target(url, self.domains)
         except FetchError as exc:
             raise CrawlError(exc.code) from exc
+        if self.cancelled.is_set():
+            raise CrawlError('paused')
         if host in self.retry_until and self.ledger.clock() >= self.retry_until[host]:
             self.retry_until.pop(host)
             self.blocked.discard(host)
@@ -89,9 +91,20 @@ class PinnedTransport:
                 due = self.retry_until[host]
                 raise RateLimit(due-self.ledger.clock(), 'cooldown', next_allowed_at=due)
             raise CrawlError('site_stopped')
-        self.reserve('request', origin='https://' + host)
         if body and len(body) > 1_000_000:
             raise CrawlError('request_too_large')
+        if self.network_policy is None:
+            self.network_policy = current_policy()
+        try:
+            if not self.network_policy.encrypted_dns:
+                host, ip, target = validate_public_url(url, self.domains, all_addresses=True)
+            self.reserve('request', origin='https://' + host)
+            if self.network_policy.encrypted_dns:
+                # A fresh snapshot is obtained after publisher waits, not before.
+                host, ip, target = validate_public_url(url, self.domains, all_addresses=True,
+                    network_policy=self.network_policy, cancelled=self.cancelled)
+        except FetchError as exc:
+            raise CrawlError(exc.code) from exc
         try:
             if self.network_policy is None:
                 self.network_policy = current_policy()

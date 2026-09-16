@@ -94,6 +94,7 @@ class LocalPublicDataClient:
         self.root = workspace.root / 'local_public'
         self.path = self.root / 'anthropic-board-v1.json'
         self.key_path = self.root / 'cursor.key'
+        self._default_transport = transport is None
         self.client = transport or SafeHTTP({HOST}, timeout=15, max_bytes=MAX_BYTES, interval=2)
         self.ledger = None
         self.secret = None
@@ -227,6 +228,11 @@ class LocalPublicDataClient:
                     self.client.blocked_hosts.discard(HOST)
                 self._rate_blocked = False
             try:
+                if self._default_transport:
+                    # A new confirmed query may adopt changed preferences. The
+                    # active query and existing circuit state are not reset.
+                    self.client.network_policy = self.workspace.network_policy()
+                    self.client.resolver = self.workspace.dns_resolver
                 # This constant GET carries no user query, region, files, cookies,
                 # passwords, application API key or Authorization header.
                 payload = self.client.json(API_URL)
@@ -235,7 +241,9 @@ class LocalPublicDataClient:
                     self._rate_blocked = True
                     self.ledger.cool(SCOPE, max(300, exc.retry_after or 0))
                 recoverable = {'dns_error', 'network_error', 'http_429', 'http_500', 'http_502',
-                               'http_503', 'http_504', 'local_proxy_connection_failed'}
+                               'http_503', 'http_504', 'local_proxy_connection_failed',
+                               'encrypted_dns_unavailable', 'encrypted_dns_timeout',
+                               'encrypted_dns_cooldown', 'encrypted_dns_budget'}
                 if cached and exc.code in recoverable:
                     return self._select(query, cached, now, cached=True, requests=1, error=exc.code)
                 raise

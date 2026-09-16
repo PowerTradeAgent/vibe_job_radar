@@ -1,7 +1,7 @@
 """Immutable route selection shared by HTTP, CLI and the browser request bridge.
 
 Static loopback HTTP and anonymous SOCKS5 share one immutable policy.
-PAC, credentials and Fake-IP/remote-DNS are separate capabilities.
+Workspace-consented Fake-IP DoH repair is opt-in; PAC and credentials remain separate.
 No settings are written to the OS, no endpoints scanned, no TLS checks removed.
 """
 from __future__ import annotations
@@ -73,6 +73,8 @@ class NetworkPolicy:
     proxy: LoopbackProxy | None = field(default=None, repr=False)
     bypass: tuple[str, ...] = field(default=(), repr=False)
     error: str | None = None
+    encrypted_dns: bool = False
+    resolver: object | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def capture(cls, *, discover=None) -> NetworkPolicy:
@@ -133,14 +135,16 @@ class NetworkPolicy:
     @property
     def fingerprint(self) -> str:
         value = [self.source, self.transport_name(self.proxy), self.proxy.host if self.proxy else None,
-                 self.proxy.port if self.proxy else None, self.bypass, self.error]
+                 self.proxy.port if self.proxy else None, self.bypass, self.error, self.encrypted_dns]
         return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()[:16]
 
     def describe(self, host: str | None = None) -> dict:
         result = {'mode': 'auto', 'source': self.source, 'policy_id': self.fingerprint,
-                  'resolution': 'local_validated_public_ip', 'direct_fallback': False,
+                  'resolution': 'system_then_opt_in_doh' if self.encrypted_dns else 'local_validated_public_ip', 'direct_fallback': False,
                   'automatic_static_http': True, 'automatic_static_socks5': True,
-                  'pac_supported': False, 'socks_supported': True, 'fake_ip_supported': False,
+                  'pac_supported': False, 'socks_supported': True, 'fake_ip_supported': self.encrypted_dns,
+                  'fake_ip_scope': 'opt_in_198.18.0.0/15_only',
+                  'encrypted_dns_provider': 'Cloudflare' if self.encrypted_dns else None,
                   'proxy_credentials_supported': False,
                   'network_tested': False}
         try:

@@ -50,6 +50,7 @@ class Response:
     body: bytes
     url: str
     redirect_trace: list[dict] = field(default_factory=list)
+    resolution: dict = field(default_factory=dict)
 
     def text(self) -> str:
         import re
@@ -181,8 +182,8 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
         raise TimeoutError("connection deadline exceeded")
 
 
-def validate_public_url(url: str, allowed_domains: set[str], *, all_addresses: bool = False
-                        ) -> tuple[str, str | tuple[str, ...], str]:
+def validate_url_target(url: str, allowed_domains: set[str]) -> tuple[str, str]:
+    """Validate the permitted HTTPS target without DNS or a connection."""
     p = urlsplit(url)
     if p.scheme != "https" or not p.hostname or p.username or p.password or p.fragment:
         raise FetchError("unsafe_url", "only credential-free HTTPS URLs without fragments are fetched")
@@ -191,14 +192,37 @@ def validate_public_url(url: str, allowed_domains: set[str], *, all_addresses: b
     host = p.hostname.lower().encode("idna").decode("ascii")
     if not any(domain_matches(host, d) for d in allowed_domains):
         raise FetchError("domain_not_permitted", host)
-    try:
-        answers = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-        ips = list(dict.fromkeys(answer[4][0] for answer in answers))
-        if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
-            raise FetchError("non_public_address")
-    except (socket.gaierror, ValueError) as exc:
-        raise FetchError("dns_error", type(exc).__name__) from exc
     target = urlunsplit(("", "", p.path or "/", p.query, ""))
+    return host, target
+
+
+def validate_public_url(url: str, allowed_domains: set[str], *, all_addresses: bool = False,
+                        network_policy: NetworkPolicy | None = None, resolver=None, cancelled=None,
+                        resolution_info: dict | None = None
+                        ) -> tuple[str, str | tuple[str, ...], str]:
+    host, target = validate_url_target(url, allowed_domains)
+    if network_policy is not None and network_policy.encrypted_dns:
+        from .encrypted_dns import PublicResolver, ResolutionError
+        active = resolver or network_policy.resolver or PublicResolver()
+        try:
+            resolved = active.resolve(host, network_policy, cancelled=cancelled)
+            ips = list(resolved.addresses)
+            if resolution_info is not None:
+                resolution_info.update(source=resolved.source, policy_id=resolved.policy_id,
+                    cache_reused=resolved.cache_reused, address_count=len(ips),
+                    ttl_remaining=max(0.0, resolved.expires_at-active.clock()))
+        except ResolutionError as exc:
+            raise FetchError(exc.code) from exc
+    else:
+        try:
+            answers = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+            ips = list(dict.fromkeys(answer[4][0] for answer in answers))
+            if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
+                raise FetchError("non_public_address")
+            if resolution_info is not None:
+                resolution_info.update(source='system_dns', cache_reused=False, address_count=len(ips), ttl_remaining=None)
+        except (socket.gaierror, ValueError) as exc:
+            raise FetchError("dns_error", type(exc).__name__) from exc
     return host, tuple(ips) if all_addresses else ips[0], target
 
 
@@ -208,19 +232,26 @@ class SafeHTTP:
         if timeout <= 0 or max_bytes <= 0 or interval < 0:
             raise ValueError("invalid transport limits")
         self.network_policy = network_policy or current_policy()
+        from .encrypted_dns import PublicResolver
+        self.resolver = self.network_policy.resolver or PublicResolver()
         self.allowed_domains = set(allowed_domains)
         self.timeout, self.max_bytes, self.interval = timeout, max_bytes, interval
+        self.last_resolution: dict = {}
         self.last_request: dict[str, float] = {}
         self.blocked_hosts: set[str] = set()
 
     def request(self, url: str, *, method: str = "GET", headers: dict | None = None,
                 body: bytes | None = None, return_redirect: bool = False) -> Response:
-        host, ip, target = validate_public_url(url, self.allowed_domains, all_addresses=True)
+        host, _ = validate_url_target(url, self.allowed_domains)
         if host in self.blocked_hosts:
             raise FetchError("host_circuit_open", host)
         wait = self.interval - (time.monotonic() - self.last_request.get(host, 0))
         if wait > 0:
             time.sleep(wait)
+        # Resolve AFTER pacing: a short DNS TTL must not expire while waiting.
+        self.last_resolution = {}
+        host, ip, target = validate_public_url(url, self.allowed_domains, all_addresses=True,
+            network_policy=self.network_policy, resolver=self.resolver, resolution_info=self.last_resolution)
         with use_policy(self.network_policy):
             conn = PinnedHTTPSConnection(host, ip, self.timeout)
         request_headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
@@ -238,14 +269,14 @@ class SafeHTTP:
                 if return_redirect and method == "GET" and not headers and body is None:
                     # Return metadata only; a higher-level policy validates the next
                     # target. API calls retain the original non-following contract.
-                    return Response(resp.status, response_headers, b"", url)
+                    return Response(resp.status, response_headers, b"", url, resolution=dict(self.last_resolution))
                 raise FetchError("redirect_not_followed", "redirect requires an explicit site policy")
             if response_headers.get("content-encoding", "identity").lower() != "identity":
                 raise FetchError("unexpected_compression")
             data = resp.read(self.max_bytes + 1)
             if len(data) > self.max_bytes:
                 raise FetchError("response_too_large")
-            return Response(resp.status, response_headers, data, url)
+            return Response(resp.status, response_headers, data, url, resolution=dict(self.last_resolution))
         except FetchError:
             raise
         except ssl.SSLCertVerificationError as exc:

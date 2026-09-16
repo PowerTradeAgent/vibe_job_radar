@@ -82,6 +82,8 @@ MESSAGES = {
     'dependency_install_failed': '浏览器组件安装失败。检查网络/磁盘权限后重试，原本地分析仍可使用。',
 }
 
+from ..network_settings import DNS_MESSAGES
+MESSAGES.update(DNS_MESSAGES)
 MESSAGES.update(HEALTH_MESSAGES)
 MESSAGES.update({
     'local_proxy_configuration_conflict': 'HTTP与SOCKS专用覆盖同时存在。只保留一种；任务不会猜测路线。',
@@ -510,7 +512,9 @@ class GuidedService:
                     self._check_browser()
                     continue
                 state = self._load(ident)
-                self._run(action,state,secret)
+                from ..network_policy import use_policy
+                with use_policy(self.workspace.network_policy()):
+                    self._run(action,state,secret)
                 if state['status'] in {'completed','stopped','paused','ready'}:
                     self._cancel.set()
             except Exception as exc:
