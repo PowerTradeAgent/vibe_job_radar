@@ -4,6 +4,7 @@ Only controlled fixtures are used. This is not real recruitment-site or VPN
 certification. No relaxed target checks or production clock overrides are added.
 """
 from __future__ import annotations
+from contextlib import closing
 import concurrent.futures
 import dataclasses
 import json
@@ -88,7 +89,7 @@ class PublisherLedgerTests(unittest.TestCase):
         self.reserve(ledger); self.now += 15
         with self.assertRaises(RateLimit) as error: self.reserve(ledger)
         self.assertEqual(error.exception.code, 'hourly_limit')
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM publisher_visits').fetchone()[0], 1)
         self.assertEqual(ledger.summary('fixture')['request']['day'], 1)
 
@@ -111,7 +112,7 @@ class PublisherLedgerTests(unittest.TestCase):
                    {'requests': 1}, {'seconds': 3}):
             with self.subTest(kw=kw), self.assertRaises(CrawlError):
                 self.ledger.set_publisher('fixture', ORIGIN, **kw)
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM publisher_policy').fetchone()[0], 0)
 
     def test_invalid_origin_fails_without_credentials_in_error(self):

@@ -9,7 +9,16 @@
 </style>
 <script src="/app.js" defer></script>
 </head>
-<body><main><section><h2>先取得一份真实公开岗位数据</h2><p>免账号、免 Key、免采集浏览器。运行源码中的 <code>scripts/run_real_example.py</code>，确认后从官方公开接口取得一条 Anthropic Technical Architect 岗位并打开报告。它不是 BOSS 数据，也不是合成演示。</p><details><summary>查看操作命令（在源码目录的终端执行）</summary><pre>/d/code_environment/anaconda_all_css/py312/python.exe scripts/run_real_example.py</pre><p>其他环境使用自己的 Python 路径。也可在 Windows 双击根目录 <code>get_real_example_windows.bat</code>。程序保存结果到同一默认工作区；回本页刷新即可看到真实岗位和报告。详细说明：<code>docs/FIRST_REAL_RESULT.md</code>。</p></details></section><p><a href="/guided">新手推荐：选平台 → 找岗位 → 勾选采集（无需手工整理 URL）</a></p>
+<body><main><section><h2>先取得一份真实公开岗位数据</h2>
+<p>免账号、免 Key、免采集浏览器。从官方公开接口获取一条 Anthropic Technical Architect 岗位并在本机生成报告。来源可能下架；它不是 BOSS 数据，也不是合成演示。</p>
+<button id="public-example" type="button">联网获取真实公开案例</button>
+<p id="public-status" role="status" aria-live="polite">点击确认前不联网。登录态、简历、个人证据和私人报告保留本地。</p>
+<details><summary>可选混合服务与网络状态</summary><p id="public-service-status"></p><pre id="public-network"></pre>
+<form id="public-search"><label>查询词<input name="query" maxlength="200" required placeholder="岗位或领域，不要填写个人资料"></label>
+<label>地区<input name="region" maxlength="100"></label><label>来源<select id="public-source" name="source" required></select></label>
+<label class="check"><input name="consent" type="checkbox" required>同意仅向已配置公开服务发送查询词、地区和所选来源，不含个人材料。</label>
+<button id="public-search-button" type="submit" disabled>查询已配置公开服务</button></form>
+</details></section><p><a href="/guided">新手推荐：选平台 → 找岗位 → 勾选采集（无需手工整理 URL）</a></p>
 <header><div class="tag">EVIDENCE FIRST / LOCAL WORKSPACE</div><h1>招聘要求 → 逐条证据 → 可量化描述</h1>
 <p class="intro">先用演示熟悉输出，再粘贴你有权处理的真实职位文本。离线分析不需要 API Key，也不需要把招聘平台账号交给本项目。</p>
 <p class="warning">当前不是“全平台自动爬取器”。已配置域名 ≠ 已登录平台；摘要 ≠ 完整正文；要求并集 ≠ 本人完全满足。</p></header>

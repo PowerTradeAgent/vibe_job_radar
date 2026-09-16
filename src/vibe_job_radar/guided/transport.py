@@ -19,6 +19,7 @@ from urllib.robotparser import RobotFileParser
 
 from ..network import FetchError, PinnedHTTPSConnection, USER_AGENT, validate_public_url
 from ..utils import domain_matches
+from ..network_policy import current_policy, use_policy
 from .contracts import CrawlError
 from .rate import RateLedger, RateLimit
 
@@ -51,6 +52,7 @@ class PinnedTransport:
     def __init__(self, adapter, ledger: RateLedger, cancelled: threading.Event,
                  progress=lambda *_: None, *, max_inline_wait=30):
         self.adapter, self.ledger, self.cancelled, self.progress = adapter, ledger, cancelled, progress
+        self.network_policy = None  # Freeze the route at the first actual request.
         self.domains = set((*adapter.domains, *adapter.resource_domains))
         if (isinstance(max_inline_wait, bool) or not isinstance(max_inline_wait, (int, float))
                 or not math.isfinite(max_inline_wait) or not 0 <= max_inline_wait <= 60):
@@ -91,7 +93,10 @@ class PinnedTransport:
         if body and len(body) > 1_000_000:
             raise CrawlError('request_too_large')
         try:
-            conn = PinnedHTTPSConnection(host, ip, 20)
+            if self.network_policy is None:
+                self.network_policy = current_policy()
+            with use_policy(self.network_policy):
+                conn = PinnedHTTPSConnection(host, ip, 20)
         except FetchError as exc:
             raise CrawlError(exc.code) from exc
         hdr = {k: v for k, v in (headers or {}).items()
@@ -134,7 +139,8 @@ class PinnedTransport:
     @staticmethod
     def _retry_seconds(value: str) -> float:
         try:
-            return max(300, float(value))
+            delay = float(value)
+            return max(300, delay) if math.isfinite(delay) else 86400
         except ValueError:
             try:
                 return max(300, parsedate_to_datetime(value).timestamp() - time.time())

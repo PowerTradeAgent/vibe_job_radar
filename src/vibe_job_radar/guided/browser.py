@@ -162,8 +162,6 @@ class PlaywrightBackend:
                 'set-cookie', 'alt-svc', 'report-to', 'nel'}}
             route.fulfill(status=result.status, headers=filtered, body=result.body)
         except CrawlError as exc:
-            if isinstance(exc, RateLimit):
-                self.wait_error = exc
             if (request.resource_type not in {'document', 'xhr', 'fetch'}
                     and exc.code in {'http_401', 'http_403'}):
                 self.resource_denials.add('optional_' + exc.code)
@@ -171,7 +169,11 @@ class PlaywrightBackend:
                 return
             if (request.resource_type == 'document' or exc.code not in {
                     'resource_domain_blocked', 'write_not_allowed', 'method_blocked'}):
-                self.error = exc.code
+                transient = {'rate_wait', 'publisher_wait', 'cooldown', 'http_429',
+                             'hourly_limit', 'daily_limit'}
+                if not isinstance(exc, RateLimit) or self.error is None or self.error in transient:
+                    self.error = exc.code
+                    self.wait_error = exc if isinstance(exc, RateLimit) else None
             try:
                 route.abort('blockedbyclient')
             except Exception:

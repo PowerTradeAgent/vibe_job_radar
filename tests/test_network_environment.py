@@ -7,10 +7,11 @@ from vibe_job_radar.network_environment import inspect_environment
 
 
 class EnvironmentTests(unittest.TestCase):
-    def test_https_proxy_is_detected_but_not_claimed_applied(self):
+    def test_https_proxy_is_selected_but_not_claimed_network_tested(self):
         r=inspect_environment(discover=lambda:{'https':'http://127.0.0.1:7890'})
         self.assertTrue(r['proxy_configuration_detected'])
-        self.assertFalse(r['collector_applies_static_proxy'])
+        self.assertTrue(r['collector_applies_static_proxy'])
+        self.assertFalse(r['selected_policy']['network_tested'])
         self.assertEqual(r['https_candidate_key'],'https')
     def test_all_proxy_is_detected(self):
         r=inspect_environment(discover=lambda:{'all':'socks5://127.0.0.1:1080'})
