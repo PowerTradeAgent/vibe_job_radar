@@ -32,7 +32,7 @@ from .contracts import CrawlError
 from .rate import RateLedger, RateLimit
 from .transport import diagnose_host
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
-                             failed_report, probe_browser, safe_text)
+                             failed_report, probe_browser, safe_text, package_version)
 from .browser_install import install_commands, run_command
 
 MESSAGES = {
@@ -123,6 +123,7 @@ class GuidedService:
         self._backends = {}
         self._thread = None
         self._last_install = 'not_started'
+        self._restart_required = False
         self._health_probe, self._installer = health_probe, installer
         self._browser_health = environment_report()
         self._setup = {'stage': 'idle', 'message': '请先检查浏览器；DNS检查与浏览器检查是两回事。', 'steps': []}
@@ -268,12 +269,15 @@ class GuidedService:
         return {'id': ident, 'queued': True}
 
     def install(self, data):
-        if data.get('consent') is not True:
-            raise InputError('安装会用当前Python下载Playwright和Chromium；请先确认。')
-        self._submit_setup('install')
+        if (not isinstance(data, dict) or set(data) - {'consent', 'mode'}
+                or data.get('consent') is not True
+                or not isinstance(data.get('mode', 'ensure'), str)
+                or data.get('mode', 'ensure') not in {'ensure', 'reinstall', 'upgrade'}):
+            raise InputError('请明确确认安装/重下载/更新模式；不接受命令、路径或版本参数。')
+        self._submit_setup('install', mode=data.get('mode', 'ensure'))
         return {'queued': True}
 
-    def _submit_setup(self, action):
+    def _submit_setup(self, action, *, mode='ensure'):
         with self._lock:
             if self._busy:
                 raise InputError('已有动作正在运行，请结束后再检查或安装。')
@@ -281,7 +285,7 @@ class GuidedService:
                 raise InputError('请先点“停止并关闭登录会话”，再检查或安装。不会擅自关闭你的登录浏览器。')
             self._browser_health = environment_report()
             self._setup = {'stage': 'queued', 'message': '已排队准备浏览器组件检查。', 'steps': []}
-            self._submit(action)
+            self._submit(action, secret=mode)
 
     def check_browser(self, data):
         if data:
@@ -289,7 +293,18 @@ class GuidedService:
         self._submit_setup('check_browser')
         return {'queued': True, 'network_scope': 'blank local page only; no job requests'}
 
+    def _restart_report(self):
+        return {**environment_report(), 'stage': 'restart', 'code': 'browser_restart_required',
+                'ready': False, 'restart_required': True,
+                'message': HEALTH_MESSAGES['browser_restart_required']}
+
     def _check_browser(self):
+        if self._restart_required:
+            report = self._restart_report()
+            with self._lock:
+                self._browser_health = report
+                self._setup.update(stage='restart_required', message=report['message'])
+            return report
         with self._lock:
             self._setup.update(stage='launch_check', message='正在实际打开并关闭空白采集浏览器，不访问招聘网站。')
         report = self._health_probe()
@@ -298,11 +313,16 @@ class GuidedService:
             self._setup.update(stage='ready' if report['ready'] else 'failed', message=report['message'])
         return report
 
-    def _install_browser(self):
+    def _install_browser(self, mode='ensure'):
         self._last_install = 'installing'
+        before = package_version('playwright')
         labels = {'package_install': '正在安装/检查 Playwright Python 包。',
                   'browser_download': '正在通过 Playwright 下载配套 Chromium，不是 pip install Chromium。'}
-        for stage, command in install_commands():
+        if mode == 'upgrade':
+            labels['package_install'] = '正在按明确同意更新当前解释器的 Playwright；完成后需重新启动工作台。'
+        if mode != 'ensure':
+            labels['browser_download'] = '正在重新下载匹配的 Chromium，已有缓存不会被直接当作修复成功。'
+        for stage, command in install_commands(mode):
             step = {'stage': stage, 'log': '', 'returncode': None}
             with self._lock:
                 self._setup.update(stage=stage, message=labels[stage])
@@ -310,7 +330,13 @@ class GuidedService:
             def progress(text):
                 with self._lock:
                     step['log'] = safe_text(text, 12000)
+            if mode == 'upgrade' and stage == 'package_install':
+                # Even a failed/partial pip update may invalidate an imported SDK.
+                self._restart_required = True
             result = self._installer(command, cancel=self._shutdown, progress=progress)
+            if stage == 'package_install' and package_version('playwright') != before:
+                if any(n == 'playwright' or n.startswith('playwright.') for n in sys.modules):
+                    self._restart_required = True
             with self._lock:
                 step.update(returncode=result.returncode, log=safe_text(result.output, 12000),
                             timed_out=result.timed_out, cancelled=result.cancelled)
@@ -324,11 +350,17 @@ class GuidedService:
         # Zero exit codes are not proof of a usable browser. Verify the real
         # headed backend on the same owner thread before reporting installed.
         report = self._check_browser()
-        self._last_install = 'installed' if report['ready'] else 'installed_not_ready'
+        self._last_install = ('restart_required' if self._restart_required else
+                              'installed' if report['ready'] else 'installed_not_ready')
 
     def diagnose(self, data):
         adapter = self.registry.get(data.get('platform'))
-        return diagnose_host(urlsplit(adapter.search_url('test')).hostname)
+        from .network_diagnostic import diagnose_workspace
+        with self._lock:
+            has_sessions = bool(self._backends)
+        return diagnose_workspace(self.workspace, urlsplit(adapter.search_url('test')).hostname,
+                                  raw_probe=diagnose_host, cancelled=self._shutdown,
+                                  has_sessions=has_sessions)
 
     def export(self, data):
         state = self._load(data.get('id'))
@@ -336,6 +368,8 @@ class GuidedService:
                 'source': 'observed links; not a proof of complete market coverage'}
 
     def _backend(self, state):
+        if self._restart_required:
+            raise BrowserStartupError(self._restart_report())
         ident = state['id']
         previous = self._backends.get(ident)
         if previous and hasattr(previous, 'alive') and not previous.alive():
@@ -567,7 +601,7 @@ class GuidedService:
                 continue
             try:
                 if action == 'install':
-                    self._install_browser()
+                    self._install_browser(secret or 'ensure')
                     continue
                 if action == 'check_browser':
                     self._check_browser()

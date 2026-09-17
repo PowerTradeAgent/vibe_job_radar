@@ -32,6 +32,8 @@ HEALTH_MESSAGES = {
     'playwright_driver_failed': 'Playwright 驱动无法启动。请查看诊断摘要，检查当前环境与驱动文件；不要反复修改招聘账号。',
     'playwright_import_failed': 'Playwright 已有包记录，但导入失败。请检查诊断中的导入位置/异常，修复同一个 Python 环境。',
     'browser_launch_timeout': '浏览器启动超时。检查系统权限、资源和安全软件记录，然后重新检查。',
+    'browser_native_heap_corruption': '浏览器文件存在且进程已经启动，但发生 Windows 堆损坏异常（0xC0000374），并非未安装。先点“重新下载并修复浏览器”；仍失败可明确选择更新组件。不要关闭安全防护或修改 DNS 来修复此崩溃。',
+    'browser_restart_required': '浏览器组件已经尝试更新，请退出并用原解释器重新启动工作台，再点“检查浏览器”。当前进程可能仍加载旧 SDK，尚不宣称修复成功；岗位与历史报告保留。',
     'browser_launch_failed': 'Chromium 启动失败；不一定是未安装。请展开诊断查看阶段、异常类型和摘要。',
     'browser_context_failed': '浏览器进程已启动，但页面上下文/拦截器初始化失败。请保留诊断以定位项目或版本兼容问题。',
     'browser_check_failed': '本机浏览器检查失败。请展开诊断查看异常，现有岗位数据不会删除。',
@@ -86,13 +88,18 @@ def command_help() -> dict:
     prefix = '& ' if os.name == 'nt' else ''
     return {'package': f'{quoted} -m pip install "{PLAYWRIGHT_REQUIREMENT}" "{VERSION_CHECK_REQUIREMENT}"',
             'browser': f'{quoted} -m playwright install chromium',
-            'powershell_browser': f'{prefix}{quoted} -m playwright install chromium'}
+            'powershell_browser': f'{prefix}{quoted} -m playwright install chromium',
+            'repair_browser': f'{quoted} -m playwright install --force chromium',
+            'powershell_repair_browser': f'{prefix}{quoted} -m playwright install --force chromium',
+            'upgrade_package': f'{quoted} -m pip install --upgrade "{PLAYWRIGHT_REQUIREMENT}" "{VERSION_CHECK_REQUIREMENT}"'}
 
 
 def environment_report() -> dict:
     browser_package = package_version('chromium')
     return {'schema_version': 1, 'checked_at': utc_now(), 'python': sys.executable,
             'python_version': platform.python_version(), 'playwright_version': package_version('playwright'),
+            'os': {'system': platform.system(), 'release': platform.release(),
+                   'version': platform.version(), 'machine': platform.machine()},
             'chromium_python_package': browser_package,
             'version_validator_package': package_version('packaging'),
             'warnings': (['检测到同名 Chromium Python 包；它不是 Playwright 的浏览器，本项目不使用或导入它。']
@@ -110,13 +117,50 @@ class BrowserStartupError(CrawlError):
         super().__init__(report['code'])
 
 
+def process_exit_facts(value: Any) -> dict:
+    """Extract process facts, not a speculative native crash cause, before truncation.
+
+    Only match Playwright's process-lifecycle lines tied to the launched PID.
+    A command argument or an unrelated process must not become a crash report.
+    Both signed and unsigned Windows DWORD exit codes occur in SDK logs.
+    """
+    text = str(value)
+    launched = re.findall(r"(?m)^\s*(?:-\s*)?<launched> pid=(\d+)\s*$", text)
+    if not launched:
+        return {}
+    pids = set(launched)
+    facts = {'process_started': True}
+    exits = re.findall(r"(?m)^\s*(?:-\s*)?\[pid=(\d+)\] <process did exit: "
+                       r"exitCode=(-?\d+|0x[0-9a-fA-F]+), signal=([^>\s]+)>\s*$", text)
+    values = [(pid, code, signal) for pid, code, signal in exits if pid in pids]
+    if not values:
+        return facts
+    # Duplicated Browser logs / Call log are harmless, conflicting exits are not.
+    codes = {int(c, 16) if c.lower().startswith('0x') else int(c) for _, c, _ in values}
+    if len(codes) != 1:
+        return facts
+    code = codes.pop()
+    if not -(2**31) <= code <= 2**32 - 1:
+        return facts
+    unsigned = code & 0xffffffff
+    facts.update(process_exit_code=code, process_exit_hex=f'0x{unsigned:08X}')
+    if unsigned == 0xC0000374:
+        facts.update(process_status='STATUS_HEAP_CORRUPTION',
+                     cause_confirmed=False,
+                     cause_note='退出状态已识别；导致堆损坏的模块尚未确定，不能据此归咎 VPN、同名包或物理内存。')
+    return facts
+
+
 def failed_report(report: dict, exc: Exception, *, code: str | None = None) -> dict:
     """Only startup errors are classified here, never arbitrary website errors."""
     stage = report.get('stage', 'unknown')
     text = str(exc).lower()
+    facts = process_exit_facts(exc) if stage == 'launch' else {}
     if code is None:
         if isinstance(exc, PermissionError) or any(s in text for s in ('eacces', 'access is denied', 'permission denied', 'winerror 5')):
             code = 'browser_permission_denied'
+        elif facts.get('process_status') == 'STATUS_HEAP_CORRUPTION':
+            code = 'browser_native_heap_corruption'
         elif 'executable doesn\'t exist' in text or 'executable does not exist' in text:
             code = 'browser_executable_missing'
         elif any(s in text for s in ('missing x server', '$display', 'cannot open display', 'no display server')):
@@ -131,7 +175,7 @@ def failed_report(report: dict, exc: Exception, *, code: str | None = None) -> d
             code = 'browser_launch_timeout'
         else:
             code = 'browser_launch_failed'
-    return {**report, 'ready': False, 'code': code, 'message': HEALTH_MESSAGES.get(code, HEALTH_MESSAGES['browser_check_failed']),
+    return {**report, **facts, 'ready': False, 'code': code, 'message': HEALTH_MESSAGES.get(code, HEALTH_MESSAGES['browser_check_failed']),
             'error_type': type(exc).__name__, 'error_summary': safe_text(exc)}
 
 
