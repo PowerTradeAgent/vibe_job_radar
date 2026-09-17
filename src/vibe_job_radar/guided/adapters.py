@@ -73,6 +73,16 @@ class DOMAdapter:
 
     def cards(self, page: PageSnapshot) -> list[Card]:
         self.accept_url(page.url)
+        path = urlsplit(page.url).path.rstrip('/')
+        search_path = urlsplit(self.search_base).path.rstrip('/')
+        login_path = urlsplit(self.login_url).path.rstrip('/')
+        # A detail page may contain many perfectly valid recommended job links.
+        # They are not this task's search results, even after a successful login.
+        if (re.search(self.detail_pattern, urlsplit(page.url).path)
+                or (path != search_path and path in {'', login_path})):
+            raise CrawlError('not_job_list')
+        if self.challenged(plain_text(page.html), page.url):
+            raise CrawlError('manual_required')
         out = {}
         for node in select_nodes(Document(page.html).root, self.card_selector):
             if node.tag != 'a' or not node.attrs.get('href'):
@@ -91,7 +101,8 @@ class DOMAdapter:
     def challenged(self, text: str, url: str) -> bool:
         return bool(re.search(r'请完成.{0,12}验证|滑动.{0,8}验证|安全验证|访问异常|访问过于频繁|'
                               r'登录后.{0,8}(?:查看|浏览)|verify you are human|access denied', text, re.I)
-                    or re.search(r'/(?:captcha|intercept|challenge)(?:/|\?)', url, re.I))
+                    or re.search(r'/(?:captcha(?:page)?|intercept|challenge)(?:[/_]|$)',
+                                 urlsplit(url).path, re.I))
 
     def detail(self, page: PageSnapshot) -> dict:
         self.accept_url(page.url, detail=True)

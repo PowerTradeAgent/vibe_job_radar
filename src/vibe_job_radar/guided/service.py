@@ -46,7 +46,7 @@ MESSAGES = {
     'ready': '岗位已列出。勾选要研究的岗位，再点击“采集所选并生成报告”。',
     'empty_list': '没有识别到岗位链接。请在采集浏览器完成搜索/登录，再点“读取当前列表”。',
     'manual_required': '需要你操作采集浏览器：完成登录/验证或打开搜索结果，然后回这里读取当前列表。',
-    'manual_browser_open': '已打开平台登录页面。请在采集浏览器完成密码/扫码/验证码登录，然后读取当前列表。',
+    'manual_browser_open': '已打开平台登录页面。请在采集浏览器正常登录；完成后点击“登录完成，继续原任务”，无需重新填写检索条件。',
     'collecting': '正在按强制频次依次打开选中岗位，真实详情链接会自动保留。',
     'completed': '本批次已结束。请查看每条结果和报告；有报告不等于所有岗位均采集成功。',
     'paused': '已请求暂停；当前网络调用结束后停止。没有完成的岗位保留，可继续。',
@@ -76,6 +76,7 @@ MESSAGES = {
     'write_not_allowed': '该页面需要未开放的写入请求。采集模式只读，不代投简历或发消息。',
     'redirect_requires_attention': '目标重定向无法安全处理，请到采集浏览器确认页面。',
     'login_origin_changed': '页面离开了该平台允许的登录域名，未填入账号密码。请人工确认。',
+    'not_job_list': '当前是登录页、首页或职位详情，不是本次搜索列表；没有把推荐岗位当成搜索结果。登录完成后点“继续原任务”返回原搜索，已选岗位和已取得正文保留。',
     'not_job_url': '当前页面不是适配器识别的职位详情；没有保存为完整 JD。',
     'wrong_platform': '页面不属于所选平台，请在同一平台重新搜索。',
     'credential_url': '链接含疑似凭据参数，未保存。请使用无登录凭据的稳定职位链接。',
@@ -360,27 +361,34 @@ class GuidedService:
             self._save(state, 'ready' if state['cards'] else 'empty_list', status='ready',
                        list_end='no_next_button')
             return
-        pages = len(state['pages_seen'])
-        while pages < state['max_pages']:
+        # Even at the page budget, inspect the current surface. Previously the
+        # loop was skipped and a login/detail/empty page was reported as ready
+        # merely because an earlier page had supplied cards.
+        while True:
             if self._cancel.is_set():
                 raise CrawlError('paused')
             page = backend.snapshot()
             if hasattr(backend, 'wire'):
                 backend.wire.ensure_robots(page.url)
             cards = adapter.cards(page)
+            if not cards:
+                self._save(state, 'empty_list', status='waiting_manual', phase='select',
+                           last_list_url=page.url)
+                return
             signature = hashlib.sha256('\n'.join(c.id for c in cards).encode()).hexdigest()
             if signature in state['pages_seen']:
+                self._save(state, last_list_url=page.url)
                 break
-            if cards:
-                state['pages_seen'].append(signature)
-            pages += 1
+            if len(state['pages_seen']) >= state['max_pages']:
+                raise CrawlError('list_page_limit')
+            state['pages_seen'].append(signature)
             existing = {r['id'] for r in state['cards']}
             for card in cards:
                 if card.id not in existing and len(state['cards']) < 100:
                     state['cards'].append({**asdict(card), 'status': 'discovered', 'record_id': '', 'resolved_url': ''})
                     existing.add(card.id)
             self._save(state, 'reading', status='running', last_list_url=page.url)
-            if not cards or pages >= state['max_pages'] or not backend.next_page():
+            if len(state['pages_seen']) >= state['max_pages'] or not backend.next_page():
                 break
         self._save(state, 'ready' if state['cards'] else 'empty_list', status='ready' if state['cards'] else 'waiting_manual', phase='select')
 
@@ -458,7 +466,11 @@ class GuidedService:
                 raise CrawlError('login_rate_limited') from exc
         backend = self._backend(state)
         self._save(state, 'opening', status='running')
+        pending_login = state.get('authentication') == 'manual_pending'
         if action == 'login':
+            # Save intent before open(): the native page itself can ask for
+            # manual assistance and raise, but the original task must survive.
+            self._save(state, authentication='manual_pending')
             backend.open(adapter.login_url, authentication=True)
             self._save(state, 'manual_browser_open', status='waiting_manual', authentication='manual_pending')
         elif action in {'capture','more','search'}:
@@ -468,6 +480,10 @@ class GuidedService:
                 self._collect(state,backend,adapter)
             else:
                 self._gather(state,backend,adapter,navigate=action=='resume')
+        if (pending_login and action in {'capture', 'search', 'resume', 'collect'}
+                and state['status'] in {'ready', 'completed'}):
+            # This is task progress after a user action, not login certification.
+            self._save(state, authentication='user_resumed')
 
     def _resume_due(self):
         """Resume only safe read actions in a still-owned browser session.

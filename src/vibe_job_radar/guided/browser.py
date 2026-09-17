@@ -91,7 +91,26 @@ class PlaywrightBackend:
     def _bind_page(self, page):
         page.on('download', lambda download: download.cancel())
         page.on('dialog', lambda dialog: dialog.dismiss())
+        page.on('close', lambda *_: self._restore_open_page())
         self.page = page
+
+    def _restore_open_page(self):
+        # Native login popups commonly close themselves. Do not destroy the
+        # surviving context (and its in-memory session) just because its newest
+        # tab closed. This only selects a page; it never navigates or clears an
+        # error, and snapshot()/cards() still validate the selected surface.
+        if self.page and not self.page.is_closed():
+            return
+        self.page = None
+        for candidate in reversed(self.context.pages if self.context else []):
+            if candidate.is_closed():
+                continue
+            try:
+                self.adapter.accept_url(candidate.url)
+            except (CrawlError, ValueError):
+                continue
+            self.page = candidate
+            return
 
     def _cookies(self, url, values):
         host, secure = urlsplit(url).hostname, urlsplit(url).scheme == 'https'
@@ -265,15 +284,23 @@ class PlaywrightBackend:
             self._pagination_page = None
 
     def collection_mode(self):
-        self.auth_mode, self.error = False, None
-        self.wait_error = None
+        self.auth_mode = False
+        # Reading an existing DOM must not erase a failed required request.
+        # A fresh explicit open() starts a new checked navigation. Retain the
+        # pre-existing transient wait handling for publisher-paced recovery.
+        if self.error in {'rate_wait', 'publisher_wait', 'cooldown', 'http_429',
+                          'hourly_limit', 'daily_limit', 'paused'}:
+            self.error = None
+            self.wait_error = None
 
     def pump(self):
+        self._restore_open_page()
         # Keeps a visible browser responsive while waiting for manual assistance.
         if self.page and not self.page.is_closed():
             self.page.wait_for_timeout(50)
 
     def alive(self):
+        self._restore_open_page()
         return bool(self.browser and self.browser.is_connected() and self.page and not self.page.is_closed())
 
     def close(self):
