@@ -1,6 +1,8 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const token = new URLSearchParams(location.hash.slice(1)).get('token') || sessionStorage.getItem('radar-session') || '';
+const intake = new URLSearchParams(location.hash.slice(1));
+let intakeApplied = false;
+const token = intake.get('token') || sessionStorage.getItem('radar-session') || '';
 if (token) sessionStorage.setItem('radar-session', token);
 if (location.hash) history.replaceState(null,'',location.pathname+location.search);
 let requestedTask=new URLSearchParams(location.search).get('task')||'';
@@ -20,6 +22,17 @@ function render(){
  $('browser-diagnostic').textContent=JSON.stringify({browser:health,installation:state.setup},null,2);}
  if(!$('site').options.length)options($('site'),state.sites.map(s=>[s.key,s.label+'（实站未验证）']));
  if(!$('role').options.length){options($('role'),Object.entries(state.roles));$('role').value='time_series';}
+ if(!intakeApplied){
+  intakeApplied=true;
+  if(intake.has('role')||intake.has('platform')||intake.has('keyword')){
+    const role=intake.get('role'),platform=intake.get('platform'),keyword=intake.get('keyword')||'';
+    if(Object.hasOwn(state.roles,role)&&state.sites.some(s=>s.key===platform)&&keyword.trim()&&keyword.length<=100&&!/[\x00-\x1f]/.test(keyword)){
+      $('role').value=role;$('site').value=platform;
+      $('search-form').elements.keyword.value=keyword;
+      sticky='已带入研究目标，尚未访问平台。请核对预算与实际访问范围，再确认开始。';
+    }else sticky='目标链接无效，未按该链接创建任务或访问平台。';
+  }
+}
  $('limits').textContent=`服务端硬限制：页面导航至少 ${state.limits.page_interval} 秒，最多 ${state.limits.pages_hour} 次/小时；经桥接的 HTTP 请求至少 ${state.limits.request_interval} 秒，最多 ${state.limits.requests_hour} 次/小时。不同任务共享配额，不能从界面提高。`;
  options($('task'),state.jobs.map(j=>[j.id,`${j.platform} · ${j.keyword} · ${statusNames[j.status]||j.status}`]));
  if(requestedTask&&state.jobs.some(j=>j.id===requestedTask)){$('task').value=requestedTask;requestedTask='';}
@@ -29,7 +42,7 @@ function render(){
  if(current.status==='waiting_rate'&&current.next_allowed_at){const remaining=Math.max(0,Math.ceil(current.next_allowed_at-Date.now()/1000));$('task-status').textContent+=`\n下次允许时间：${new Date(current.next_allowed_at*1000).toLocaleString()}（约 ${remaining} 秒）。${current.automatic_resume_available?'保留会话，到时自动继续。':'会话已退出或此动作需确认，届时点击继续；不必重填条件。'}`;}
  $('audit').textContent=JSON.stringify(current,null,2);renderCards();
  $('result').replaceChildren(document.createTextNode(`本批已保存 ${current.cards.filter(c=>c.status==='ok').length} 个岗位；发现 ${current.cards.length} 个候选链接。`));
- if(current.report_id){for(const [file,label] of [['requirements_zh.csv','下载岗位要求 CSV'],['descriptions.md','下载描述模板']]){const b=document.createElement('button');b.className='secondary';b.textContent=label;const id=current.report_id;b.onclick=()=>act(()=>downloadReport(id,file));$('result').append(b);}const a=document.createElement('a');a.href='/advanced';a.textContent=' 进入个人证据中心';$('result').append(a);}
+ if(current.report_id){for(const [file,label] of [['requirements_zh.csv','下载岗位要求 CSV'],['descriptions.md','下载描述模板']]){const b=document.createElement('button');b.className='secondary';b.textContent=label;const id=current.report_id;b.onclick=()=>act(()=>downloadReport(id,file));$('result').append(b);}const view=document.createElement('a');view.href='/#report='+current.report_id;view.textContent=' 查看本批研究结论';const a=document.createElement('a');a.href='/advanced#report='+current.report_id;a.textContent=' 用本批要求进入个人证据中心';$('result').append(view,a);}
  }
  for(const button of document.querySelectorAll('button'))button.disabled=state.busy && !['pause','stop'].includes(button.id);
  note(sticky || (state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''));

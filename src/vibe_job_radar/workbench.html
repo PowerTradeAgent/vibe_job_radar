@@ -5,16 +5,21 @@
 <meta name="referrer" content="no-referrer">
 <title>Vibe Job Radar · 本地工作台</title>
 <style>
-:root{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#192b3f;background:#f3f6fa;line-height:1.65}*{box-sizing:border-box}body{margin:0}main{max-width:1100px;margin:auto;padding:26px 22px 70px}header{padding:12px 0 20px}h1{font-size:30px;margin:0}h2{font-size:21px;margin:0 0 14px}h3{font-size:17px;margin:16px 0 8px}.tag{font-size:13px;letter-spacing:.08em;color:#526780}.intro{max-width:850px;color:#485d75}section{background:white;border:1px solid #dce3ec;border-radius:12px;padding:22px;margin:18px 0}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px}.wide{grid-column:1/-1}label{display:block;font-weight:600}input,textarea,select{font:inherit;width:100%;padding:9px 11px;border:1px solid #aebdd0;border-radius:6px;background:white;color:#192b3f}textarea{resize:vertical}input[type=checkbox]{width:auto;margin-right:8px}label.check{font-weight:400;margin:8px 0}.choices{display:flex;flex-wrap:wrap;gap:4px 20px}.choices label{font-weight:400}button{font:inherit;cursor:pointer;padding:8px 15px;border:1px solid #265b94;border-radius:7px;background:#265b94;color:white;margin:5px 8px 5px 0}button.secondary{background:white;color:#265b94}button:disabled{opacity:.5;cursor:wait}small,.muted{color:#536a83}#notice{position:sticky;top:8px;z-index:2;white-space:pre-wrap;border:1px solid #b8cce0;background:#eef5ff;padding:12px 16px;border-radius:8px}#notice:empty{display:none}.warning{border-left:4px solid #d49538;background:#fff8e9;padding:10px 14px}.stats{font-size:18px;font-weight:600}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;text-align:left;font-size:14px}th,td{padding:10px;border-bottom:1px solid #e0e6ee;vertical-align:top;min-width:75px}td.quote{min-width:260px;white-space:pre-wrap}th{background:#f3f6fa}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f7f9fc;border:1px solid #dce3ec;padding:14px;border-radius:7px;max-height:440px;overflow:auto}details{margin:14px 0}summary{cursor:pointer;font-weight:600}a{color:#245e9d}#runs button{display:block;text-align:left}.files{display:flex;flex-wrap:wrap}.files button{font-size:13px}footer{color:#536a83;font-size:13px}@media(max-width:650px){.grid{grid-template-columns:1fr}main{padding:18px 12px}section{padding:16px}h1{font-size:25px}}
+:root{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#192b3f;background:#f3f6fa;line-height:1.65}*{box-sizing:border-box}[hidden]{display:none!important}.brief-card{padding:12px 0;border-bottom:1px solid #e0e6ee}.brief-card p{margin:6px 0;overflow-wrap:anywhere}#research-brief{background:#f8fbff}#research-start a{display:inline-block;padding:5px 0}body{margin:0}main{max-width:1100px;margin:auto;padding:26px 22px 70px}header{padding:12px 0 20px}h1{font-size:30px;margin:0}h2{font-size:21px;margin:0 0 14px}h3{font-size:17px;margin:16px 0 8px}.tag{font-size:13px;letter-spacing:.08em;color:#526780}.intro{max-width:850px;color:#485d75}section{background:white;border:1px solid #dce3ec;border-radius:12px;padding:22px;margin:18px 0}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px}.wide{grid-column:1/-1}label{display:block;font-weight:600}input,textarea,select{font:inherit;width:100%;padding:9px 11px;border:1px solid #aebdd0;border-radius:6px;background:white;color:#192b3f}textarea{resize:vertical}input[type=checkbox]{width:auto;margin-right:8px}label.check{font-weight:400;margin:8px 0}.choices{display:flex;flex-wrap:wrap;gap:4px 20px}.choices label{font-weight:400}button{font:inherit;cursor:pointer;padding:8px 15px;border:1px solid #265b94;border-radius:7px;background:#265b94;color:white;margin:5px 8px 5px 0}button.secondary{background:white;color:#265b94}button:disabled{opacity:.5;cursor:wait}small,.muted{color:#536a83}#notice{position:sticky;top:8px;z-index:2;white-space:pre-wrap;border:1px solid #b8cce0;background:#eef5ff;padding:12px 16px;border-radius:8px}#notice:empty{display:none}.warning{border-left:4px solid #d49538;background:#fff8e9;padding:10px 14px}.stats{font-size:18px;font-weight:600}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;text-align:left;font-size:14px}th,td{padding:10px;border-bottom:1px solid #e0e6ee;vertical-align:top;min-width:75px}td.quote{min-width:260px;white-space:pre-wrap}th{background:#f3f6fa}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f7f9fc;border:1px solid #dce3ec;padding:14px;border-radius:7px;max-height:440px;overflow:auto}details{margin:14px 0}summary{cursor:pointer;font-weight:600}a{color:#245e9d}#runs button{display:block;text-align:left}.files{display:flex;flex-wrap:wrap}.files button{font-size:13px}footer{color:#536a83;font-size:13px}@media(max-width:650px){.grid{grid-template-columns:1fr}main{padding:18px 12px}section{padding:16px}h1{font-size:25px}}
 </style>
 <script src="/app.js" defer></script>
 <script src="/network-settings.js" defer></script>
 </head>
-<body><main><section id="network-preferences"><details><summary>网络自动适配（不必关闭 VPN/TUN）</summary>
-<p>仅在系统返回映射地址时，可使用 Cloudflare 加密解析目标域名。解析服务可看到域名和网络出口，不接收职位正文、URL 查询参数、Cookie、密码或个人材料。普通公网 DNS 不额外请求它，不修改系统 DNS，也不扫描代理端口。</p>
-<label class="check"><input id="encrypted-dns-consent" type="checkbox">我同意上述解析方式，并在此本机工作区记住选择</label>
-<button id="save-network-preferences" type="button" disabled>保存网络偏好</button><p role="status" aria-live="polite">正在读取本机偏好（不联网测试）。</p>
-<p>新公开查询及新浏览器会话生效；已有会话不会偷偷换网络。关闭后不再发起新的加密解析。特定企业网络或解析服务不可用时仍会说明失败，不绕过权限或证书错误。</p></details></section><section><h2>先取得一份真实公开岗位数据</h2>
+<body><main><header><div class="tag">EVIDENCE FIRST / LOCAL WORKSPACE</div><h1>招聘要求 → 逐条证据 → 可量化描述</h1>
+<p class="intro">研究目标岗位如何要求 AI 辅助编程，保留招聘原文，再用自己的项目和观测数据形成可信描述。先取得相关 JD，再复核要求，最后补本人证据。</p>
+<p class="warning">当前不是“全平台自动爬取器”。已配置域名 ≠ 已登录平台；摘要 ≠ 完整正文；要求并集 ≠ 本人完全满足。</p></header><section id="research-start"><h2>1. 先确定这次研究什么岗位</h2>
+<p>从目标平台找到相关岗位，正常登录并选择正文；结果回来后看本批要求，再进入个人证据。一次浏览器任务研究一个方向。</p>
+<form id="research-goal"><div class="grid"><label>岗位方向<select id="research-role" name="role" required></select></label>
+<label>目标平台<select name="platform"><option value="boss">BOSS直聘</option><option value="liepin">猎聘</option><option value="51job">前程无忧</option></select></label>
+<label class="wide">本次检索词<input name="keyword" maxlength="100" required placeholder="例如：时间序列算法工程师、架构师"></label></div>
+<button id="research-go" type="submit" disabled>带着目标进入平台采集</button></form>
+<p class="muted">三站自动采集仍需现场验证；平台要求登录时在原生页面完成，不交出密码或 Cookie。下一页会显示该任务的访问范围与预算，确认前不请求平台。</p>
+<p><a href="#public-entry">先用已接入的公开来源试用（仅 Anthropic）</a> · <a href="#manual-entry">我已有获准处理的真实 JD</a> · <a href="#analysis-entry">分析已保存的岗位</a></p></section><section id="public-entry"><h2>2. 获取岗位：已接入的公开来源</h2>
 <p>免账号、免 Key、免采集浏览器。从官方公开接口获取一条 Anthropic Technical Architect 岗位并在本机生成报告。来源可能下架；它不是 BOSS 数据，也不是合成演示。</p>
 <button id="public-example" type="button">联网获取真实公开案例</button>
 <p id="public-status" role="status" aria-live="polite">点击确认前不联网。登录态、简历、个人证据和私人报告保留本地。</p>
@@ -27,18 +32,16 @@
 <button id="public-next" type="button" hidden>读取下一页（本地缓存）</button>
 <p class="muted">默认来源仅为 Anthropic 公开招聘，不代表全市场，也不替代指定招聘平台。筛选按原文关键词，不推断远程资格。来源时间与缓存状态会明确标注。</p>
 </details></section><p><a href="/guided">新手推荐：选平台 → 找岗位 → 勾选采集（无需手工整理 URL）</a></p>
-<header><div class="tag">EVIDENCE FIRST / LOCAL WORKSPACE</div><h1>招聘要求 → 逐条证据 → 可量化描述</h1>
-<p class="intro">先用演示熟悉输出，再粘贴你有权处理的真实职位文本。离线分析不需要 API Key，也不需要把招聘平台账号交给本项目。</p>
-<p class="warning">当前不是“全平台自动爬取器”。已配置域名 ≠ 已登录平台；摘要 ≠ 完整正文；要求并集 ≠ 本人完全满足。</p></header>
+
 <section><h2>自动采集与个人证据</h2><a href="/advanced">进入自动采集 / 原文复核 / 附件与量化指标工作台</a><p>无需手写 JSON。原有录入、演示与报告入口继续保留。</p></section>
 <div id="notice" role="status" aria-live="polite"></div>
-<section><h2>1. 检查环境与数据</h2><p id="workspace" class="muted"></p><p id="counts" class="stats">正在读取本地数据…</p>
+<section><h2>本地数据与辅助工具</h2><p id="workspace" class="muted"></p><p id="counts" class="stats">正在读取本地数据…</p>
 <button id="doctor" type="button" class="secondary">环境自检（不联网）</button><button id="demo" type="button">运行合成演示</button><button id="refresh" type="button" class="secondary">刷新数据</button>
 <small>演示只写入独立 demo.sqlite，绝不混入真实数据库。</small>
 <details><summary>平台接入状态与账号说明</summary><div id="sources" class="scroll"></div>
 <p>若平台要求登录，请你在自己的浏览器/App 中登录并完成验证码；只将获准处理的职位文本带入本工作台。不要粘贴密码、验证码、Cookie、候选人简历或不必要的联系人信息。</p>
 <p id="key-status"></p></details></section>
-<section><h2>2. 添加真实招聘文本</h2>
+<section id="manual-entry"><h2>已有材料：添加真实招聘文本</h2>
 <form id="job-form"><div class="grid">
 <label>职位名称<input name="title" required maxlength="2000" placeholder="使用真实标题，例如：时间序列算法工程师"></label>
 <label>来源平台<select name="platform" id="job-platform"></select></label>
@@ -58,7 +61,7 @@
 <label class="check"><input name="full_text_confirmed" type="checkbox" required>有权处理该文件；其中标记为 full_text 的行确实包含完整 JD，且不混入合成演示。</label>
 <button type="submit" class="secondary">校验并导入文件</button></form></details>
 </section>
-<section><h2>3. 选择岗位与发现线索</h2><div id="roles" class="choices"></div>
+<section><h2>分析范围与可选搜索</h2><div id="roles" class="choices"></div>
 <p class="muted">岗位筛选依据标题/正文配置，不会因为勾选了岗位就修改原始招聘要求。平台选择仅用于搜索发现；分析按上述岗位筛选已导入数据。</p>
 <details><summary>可选：搜索计划与 Brave API 发现（不是平台自动登录）</summary>
 <div id="platforms" class="choices"></div><button id="plan" type="button" class="secondary">预览检索计划（零请求）</button><pre id="plan-output" hidden></pre>
@@ -69,14 +72,23 @@
 <p>没有 Key 也能使用主流程：在招聘平台自行检索，在有权处理的范围内复制完整 JD 到上方表单。搜索失败时检查网络、密钥与额度，不要提供平台密码。</p></details>
 <details><summary>已导入的真实记录（最多展示最近 200 条）</summary><div id="records" class="scroll"></div></details>
 </section>
-<section><h2>4. 生成要求清单与描述</h2><button id="analyze" type="button">分析真实数据并生成报告</button>
+<section id="analysis-entry"><h2>3. 看本批要求，再补我的证据</h2><button id="analyze" type="button">分析真实数据并生成报告</button>
 <p class="muted">本工作台默认仅本地规则分析，不调用大模型、不发送职位正文到外部模型服务。每次报告单独保存；没有本人证据的指标保持【待填】。</p>
 <div id="report" hidden><h3 id="report-title"></h3><p id="report-message" class="warning"></p><p id="report-stats"></p>
-<details open><summary>逐条要求预览（前 100 行；完整数据请下载 CSV）</summary><div id="requirements" class="scroll"></div></details>
+<section id="research-brief" aria-label="本批岗位研究结论" hidden><h3>先看这份报告能回答什么</h3>
+<p id="brief-conclusion" class="warning"></p><p id="brief-scope"></p><p id="brief-counts"></p><p id="brief-exclusions"></p>
+<h3>样本中的 AI 编程要求</h3><p id="brief-common" class="muted"></p><div id="brief-capabilities"></div>
+<h3>分岗位补充</h3><div id="brief-roles"></div>
+<h3>我的证据下一步</h3><p id="brief-evidence"></p><p id="brief-next"></p>
+<p class="muted">没有本人观测值的内容保持【待填】。岗位硬条件另行核对；规则接收和映射完整度不是胜任度或录用概率。</p></section><a id="evidence-next" href="/advanced" hidden>用我的证据继续：已选中这份报告</a><details open><summary>逐条要求预览（前 100 行；完整数据请下载 CSV）</summary><div id="requirements" class="scroll"></div></details>
 <details><summary>通用描述模板预览</summary><pre id="descriptions"></pre></details>
-<h3>下载报告文件</h3><p class="muted">先下载 requirements_zh.csv、descriptions.md、role_descriptions.md、evidence_gaps.md。dashboard.html 下载后在本机浏览器打开。完整来源审计可能包含原始职位文本，请勿不加检查地公开。</p><div id="files" class="files"></div>
+<h3>下载报告文件</h3><p class="muted">先读本批研究结论；需要带走时下载 research_brief.md，再按需下载原文清单、分岗位模板和缺口表。dashboard.html 下载后在本机浏览器打开。完整来源审计可能包含原始职位文本，请勿不加检查地公开。</p><div id="files" class="files"></div>
 <details><summary>本次审计信息与警告</summary><pre id="manifest"></pre></details></div>
 <h3>历史报告（最近 30 次）</h3><div id="runs"></div></section>
-<footer>本地单用户工具，不要映射到公网或共享给其他用户。数据保存在上方目录；停止服务后可备份或删除该目录。人工复核和个人证据可从上方高级工作台进入；CLI 继续兼容。</footer>
+<section id="network-preferences"><details><summary>网络自动适配（不必关闭 VPN/TUN）</summary>
+<p>仅在系统返回映射地址时，可使用 Cloudflare 加密解析目标域名。解析服务可看到域名和网络出口，不接收职位正文、URL 查询参数、Cookie、密码或个人材料。普通公网 DNS 不额外请求它，不修改系统 DNS，也不扫描代理端口。</p>
+<label class="check"><input id="encrypted-dns-consent" type="checkbox">我同意上述解析方式，并在此本机工作区记住选择</label>
+<button id="save-network-preferences" type="button" disabled>保存网络偏好</button><p role="status" aria-live="polite">正在读取本机偏好（不联网测试）。</p>
+<p>新公开查询及新浏览器会话生效；已有会话不会偷偷换网络。关闭后不再发起新的加密解析。特定企业网络或解析服务不可用时仍会说明失败，不绕过权限或证书错误。</p></details></section><footer>本地单用户工具，不要映射到公网或共享给其他用户。数据保存在上方目录；停止服务后可备份或删除该目录。人工复核和个人证据可从上方高级工作台进入；CLI 继续兼容。</footer>
 
 </main></body></html>

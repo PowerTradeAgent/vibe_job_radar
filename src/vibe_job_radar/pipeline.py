@@ -12,6 +12,7 @@ from .extract import RuleExtractor, apply_reviews, hard_constraints
 from .metrics import catalog_rows
 from .models import Requirement
 from .report import dashboard, write_requirements_zh
+from .research_brief import build_brief, brief_markdown
 from .store import Store
 from .synthesis import aggregate, descriptions, evidence_matrix, job_coverage, load_candidate
 from .utils import atomic_json, atomic_text, digest, json_text, load_json, parse_time, utc_now, write_csv
@@ -159,6 +160,7 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
         "unknown_review_ids": unknown_review_ids, "orphan_evidence_requirement_ids": orphan_evidence_ids,
         "warnings": warnings,
     }
+    manifest["research_brief"] = build_brief(manifest, summary, requirements, matrix, audit, conf)
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix="." + output.name + "-", dir=output.parent))
     try:
@@ -191,6 +193,8 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
         atomic_json(staging / "reviews.effective.json", reviews)
         atomic_json(staging / "effective_config.json", conf)
         atomic_json(staging / "llm_audit.json", llm.audit if llm else [])
+        atomic_json(staging / "research_brief.json", manifest["research_brief"])
+        atomic_text(staging / "research_brief.md", brief_markdown(manifest["research_brief"]))
         atomic_text(staging / "descriptions.md", claims)
         atomic_text(staging / "role_descriptions.md", role_claims)
         atomic_text(staging / "evidence_gaps.md", gaps)
