@@ -11,6 +11,7 @@ from http.cookies import SimpleCookie
 from urllib.parse import urljoin, urlsplit
 
 from ..utils import domain_matches
+from ..network_policy import current_policy
 from .contracts import CrawlError, PageSnapshot
 from .rate import RateLimit
 from .transport import PinnedTransport
@@ -25,6 +26,12 @@ class PlaywrightBackend:
             raise ValueError('unsupported browser choice')
         self.adapter, self.cancelled = adapter, cancelled
         self.wire = transport_factory(adapter, ledger, cancelled, progress)
+        # Capture the workspace snapshot here, on the owner context, not in the
+        # first route callback: Playwright's dispatcher need not inherit ContextVars.
+        # Injected offline/startup-only transports may not expose this capability.
+        bind_policy = getattr(self.wire, 'bind_policy', None)
+        if callable(bind_policy):
+            bind_policy(current_policy())
         self.browser = self.context = self.page = self.runtime = None
         self.error = None
         self.wait_error = None
