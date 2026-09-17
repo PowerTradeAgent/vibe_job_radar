@@ -52,6 +52,13 @@ def diagnose_workspace(workspace, host, *, raw_probe, cancelled, has_sessions=Fa
         except ResolutionError as exc:
             result.update(code=exc.code, message=DNS_MESSAGES.get(exc.code, '当前策略的解析未通过；未请求目标网站，也不切换出口或关闭证书校验。'))
             result['effective_resolution'] = {'tested': True, 'passed': False, 'code': exc.code}
+            if exc.code == 'encrypted_dns_tls_failed' and exc.diagnostic:
+                result['effective_resolution']['tls_diagnostic'] = exc.diagnostic
+                result['message'] += ' ' + exc.diagnostic['next_action']
+                if exc.diagnostic.get('reused_failure'):
+                    result['message'] += ' 当前处于原保护等待期，显示的是上次失败证据，本次没有重连解析服务。'
+                    if exc.diagnostic.get('matches_current_policy') is False:
+                        result['message'] += ' 原失败的策略标识与当前不同，不作为新策略已经失败的证据。'
     else:
         result['message'] = ('系统 DNS 未得到可用结果；此检查没有证明浏览器故障或账号问题。'
                              if result['code'] == 'dns_error' else

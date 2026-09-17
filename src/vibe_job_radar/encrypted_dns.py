@@ -6,6 +6,7 @@ No recursive bootstrap lookup, arbitrary resolver URL or OS configuration write.
 """
 from __future__ import annotations
 
+import copy
 import http.client
 import ipaddress
 import math
@@ -48,6 +49,7 @@ class PublicResolver:
         self._lock = threading.Lock()
         self._cooldown = 0.0
         self._cooldown_reason = 'encrypted_dns_cooldown'
+        self._cooldown_diagnostic = None
         self._last_clock = None
         self._requests = []
 
@@ -55,6 +57,7 @@ class PublicResolver:
         # Revocation clears answers but does not reset resolver rate limits.
         with self._lock:
             self._cache.clear()
+            self._cooldown_diagnostic = None
 
     def resolve(self, host, policy, *, timeout=10.0, cancelled=None):
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
@@ -118,7 +121,11 @@ class PublicResolver:
             if saved and now < saved.expires_at:
                 return replace(saved, cache_reused=True)
             if now < self._cooldown:
-                raise ResolutionError(self._cooldown_reason)
+                details = copy.deepcopy(self._cooldown_diagnostic)
+                if details is not None:
+                    details['reused_failure'] = True
+                    details['matches_current_policy'] = details.get('policy_id') == policy.fingerprint
+                raise ResolutionError(self._cooldown_reason, diagnostic=details)
             self._requests = [stamp for stamp in self._requests if now-stamp < 300]
             if len(self._requests) >= 60:
                 raise ResolutionError('encrypted_dns_budget')
@@ -166,6 +173,7 @@ class PublicResolver:
                     # Preserve hard failures across subsequent attempts. Relabelling
                     # a certificate/private-answer error as temporary could allow
                     # the job cache to conceal it on the user's second click.
+                    self._cooldown_diagnostic = copy.deepcopy(exc.diagnostic)
                     self._cooldown_reason = ('encrypted_dns_cooldown'
                                              if exc.code in TRANSIENT_ERRORS else exc.code)
                 raise
@@ -195,11 +203,13 @@ class PublicResolver:
         route = replace(policy, source='explicit_application', proxy=selected, bypass=(),
                         encrypted_dns=False, resolver=None)
         conn = None
+        phase = 'tls_context'
         try:
             self._permission()
             self._cancel(cancelled)
             budget = max(0.001, deadline-self.clock())
             conn = PinnedHTTPSConnection(DOH_HOST, BOOTSTRAP, budget, network_policy=route)
+            phase = 'tls_handshake'
             conn.connect()
             def remaining():
                 self._permission()
@@ -211,10 +221,12 @@ class PublicResolver:
                     conn.sock.settimeout(value)
             remaining()
             started = self.clock()
+            phase = 'dns_request'
             conn.request('POST', '/dns-query', body=query(host, kind), headers={
                 'Accept': 'application/dns-message', 'Content-Type': 'application/dns-message',
                 'Accept-Encoding': 'identity', 'User-Agent': 'VibeJobRadar-DNS/1'})
             remaining()
+            phase = 'response_headers'
             response = conn.getresponse()
             headers = {}
             for key, value in response.getheaders():
@@ -233,6 +245,7 @@ class PublicResolver:
             if (headers.get('content-type','').split(';')[0].strip().lower() != 'application/dns-message'
                     or headers.get('content-encoding','identity').lower() != 'identity'):
                 raise ResolutionError('encrypted_dns_invalid_response')
+            phase = 'response_body'
             parts = bytearray()
             while True:
                 remaining()
@@ -272,8 +285,13 @@ class PublicResolver:
             return result
         except ResolutionError:
             raise
-        except ssl.SSLError:
-            raise ResolutionError('encrypted_dns_tls_failed') from None
+        except ssl.SSLError as exc:
+            from .tls_diagnostic import failure_details
+            # Keep the stable hard-failure code. Details do not change retries,
+            # trust, SNI, target route, consent or the request budget.
+            details = failure_details(exc, phase=phase, connection=conn,
+                                      bootstrap=BOOTSTRAP, policy_id=policy.fingerprint)
+            raise ResolutionError('encrypted_dns_tls_failed', diagnostic=details) from None
         except FetchError as exc:
             # Keep the reason category only, never upstream headers or URL data.
             raise ResolutionError('encrypted_dns_route_failed') from exc
