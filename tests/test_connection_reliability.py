@@ -206,7 +206,7 @@ class RealTLSRoundTripTests(unittest.TestCase):
 
     def round_trip(self, operation, *, hostname=HOST):
         with patch('socket.getaddrinfo', return_value=answers(IP6, IP4, IP4_B)), \
-             patch('vibe_job_radar.network.ssl.create_default_context', return_value=self.client_context), \
+             patch('vibe_job_radar.network.create_client_context', return_value=self.client_context), \
              patch('vibe_job_radar.network.socket.create_connection', side_effect=self.local_test_dial):
             # Numeric loopback dialing must use its real resolver rather than
             # the fixture DNS snapshot for the external hostname.

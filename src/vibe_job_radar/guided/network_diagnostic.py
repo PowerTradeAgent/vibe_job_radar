@@ -8,11 +8,13 @@ from __future__ import annotations
 from ..dns_wire import ResolutionError
 from ..network_settings import DNS_MESSAGES
 from ..loopback_proxy import LocalProxyError
+from ..tls_context import status as tls_status
 
 
 def diagnose_workspace(workspace, host, *, raw_probe, cancelled, has_sessions=False):
     policy = workspace.network_policy()
     result = {
+        'tls_environment': tls_status(),
         'host': host, 'passed': False, 'code': 'not_checked', 'addresses': [],
         'system_dns': None, 'effective_resolution': {'tested': False, 'passed': False},
         'policy': policy.describe(host), 'encrypted_dns_enabled': policy.encrypted_dns,

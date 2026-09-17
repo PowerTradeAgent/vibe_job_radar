@@ -124,7 +124,7 @@ class EncryptedRoundTripTests(unittest.TestCase):
             from vibe_job_radar.loopback_socks import LoopbackSocks5
             factory=LoopbackSocks5 if self.socks else LoopbackProxy
             self.policy=replace(self.policy,source='automatic_static',proxy=factory('127.0.0.1',self.proxy.server_address[1]),bypass=(DOH_HOST,))
-        with patch('socket.getaddrinfo',side_effect=gai),patch('socket.create_connection',side_effect=dial),patch('vibe_job_radar.network.ssl.create_default_context',side_effect=contexts,return_value=context):
+        with patch('socket.getaddrinfo',side_effect=gai),patch('socket.create_connection',side_effect=dial),patch('vibe_job_radar.network.create_client_context',side_effect=contexts,return_value=context):
             return callback()
 
     def get(self, **kw):

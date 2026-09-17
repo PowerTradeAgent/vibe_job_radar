@@ -11,6 +11,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
+from ..tls_context import TRUSTSTORE_REQUIREMENT
 from .browser_health import PLAYWRIGHT_REQUIREMENT, VERSION_CHECK_REQUIREMENT, safe_text
 
 
@@ -29,6 +30,8 @@ def install_commands(mode='ensure') -> tuple[tuple[str, list[str]], ...]:
     replaces the matching browser, without changing the shared Python SDK.
     'upgrade' is a separate explicitly confirmed update of SDK and matched build.
     """
+    if mode == 'tls':
+        return (('tls_component', [sys.executable, '-m', 'pip', 'install', TRUSTSTORE_REQUIREMENT]),)
     if mode not in {'ensure', 'reinstall', 'upgrade'}:
         raise ValueError('invalid browser installation mode')
     browser = [sys.executable, '-m', 'playwright', 'install']

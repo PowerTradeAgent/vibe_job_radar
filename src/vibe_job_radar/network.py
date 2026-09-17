@@ -18,6 +18,7 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit, urlunsplit
 from urllib.robotparser import RobotFileParser
 from .utils import domain_matches
+from .tls_context import create_client_context
 from .loopback_proxy import LoopbackProxy, LocalProxyError
 from .network_policy import NetworkPolicy, current_policy, use_policy
 
@@ -118,7 +119,7 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
         self.network_mode = self.network_policy.transport_name(self._local_proxy)
         self.connection_attempts: list[dict] = []
         self.connected_ip: str | None = None
-        super().__init__(host, port=443, timeout=timeout, context=ssl.create_default_context())
+        super().__init__(host, port=443, timeout=timeout, context=create_client_context())
 
     def connect(self) -> None:
         # HTTP bytes are not sent until this method returns. Only pre-request
