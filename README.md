@@ -2,9 +2,9 @@
 
 ## 当前主干：本地优先，生产部署后置
 
-PR #31 已合并到 `main@bc243f67`。首页可直接使用本地公开目录查询、真实公开案例、持久限频与失败任务转交浏览器；不要求先部署自己的服务器。当前公开目录限定为 Anthropic Greenhouse，不是全市场或BOSS实站认证。登录态、简历、个人证据与私人报告默认留本地。详见 [本机公开查询](docs/LOCAL_FIRST_PUBLIC_DATA.md)。
+PR #31、#32、#33 已合并，当前迭代基线为 `main@6357554`。首页可直接使用本地公开目录查询、真实公开案例、持久限频与失败任务转交浏览器；不要求先部署自己的服务器。当前公开目录限定为 Anthropic Greenhouse，不是全市场或BOSS实站认证。登录态、简历、个人证据与私人报告默认留本地。详见 [本机公开查询](docs/LOCAL_FIRST_PUBLIC_DATA.md)。
 
-本轮开发分支在该main上整合本机匿名SOCKS5与自动网络策略；合并前不属于已发布主干能力。Fake-IP、PAC、代理认证和三站实测仍待完成，不能宣称所有VPN/TUN已兼容。参阅 [网络状态](docs/NETWORK_COMPATIBILITY_STATUS.md) 与 [接线/保全说明](docs/SOCKS_POLICY_INTEGRATION.md)。
+匿名本机 HTTP/SOCKS5 自动静态策略，以及用户明确同意的 198.18/15 Fake-IP 加密解析已进入主干。高级 collection.py 批次仍未自动采用工作区加密解析偏好；其他映射段、PAC、代理认证和三站实测仍未完成，不能宣称所有 VPN/TUN 已兼容。参阅 [网络状态](docs/NETWORK_COMPATIBILITY_STATUS.md) 与 [接线/保全说明](docs/SOCKS_POLICY_INTEGRATION.md)。
 
 **先拿到真实数据：** 在工作台首页输入关键词、地区并选择公开来源，确认后由本机获取目录、筛选分页和生成报告，无需Key或自建服务地址。也可点击“联网获取真实公开案例”获取固定单岗位；原 `scripts/run_real_example.py` 作为可选CLI入口保留，不是新手必需步骤。该来源不代表BOSS数据，失败不使用合成内容冒充。
 
@@ -44,7 +44,7 @@ PR #31 已合并到 `main@bc243f67`。首页可直接使用本地公开目录查
 
 新向导的当前批次由后端线程执行，关工作台网页仍继续；暂停/停止控制任务，关闭终端退出服务。旧高级页仍由网页驱动后续步骤。这不是开机自启的长期调度服务。
 
-浏览器请求保留公网DNS/IP绑定、TLS和域名边界。Fake-IP导致的 `non_public_address` 现在可以点击网络检查查看地址，但不会通过关闭安全检查来修复。验证码、robots拒绝、资源域名或页面结构变化仍可能中止采集。
+浏览器请求保留公网DNS/IP绑定、TLS和域名边界。已接入的公开查询和浏览器路径在用户阅读隐私说明并明确同意后，可修复系统解析全部落入 198.18/15 的情况；解析商可看到域名和出口。其他私网/混合回答仍拒绝，不关闭安全检查。验证码、robots拒绝、资源域名或页面结构变化仍可能中止采集。
 
 ## 使用说明与开发契约
 
@@ -77,3 +77,8 @@ python scripts/run_guided_browser.py
 ### 已装Playwright仍提示浏览器未就绪？
 
 先读[浏览器安装与启动修复](docs/BROWSER_SETUP.md)。`pip install Chromium`装的是同名Python包；浏览器本体要通过当前Python的`-m playwright install chromium`下载。新手页可点“检查浏览器（不采集）”，区分包、可执行文件与真实空白页启动；安装失败阶段和脱敏输出直接可见。
+
+
+### 维护者：源码绑定验收
+
+构建候选前运行 `python scripts/verify_candidate.py`，再运行 `python scripts/build_candidate.py`。只有与当前源码一致且四项本地检查全部通过的证据才能构建；这不是普通用户查询岗位的前置步骤，也不证明实际 VPN/招聘站点认证。详见 [源码验收说明](docs/SOURCE_QUALIFICATION.md) 与 [当前交付清单](docs/DELIVERY_STATUS.md)。
