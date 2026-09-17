@@ -1,0 +1,30 @@
+name: browser-choice
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  installed-edge:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only the supported Python SDK
+        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2"
+      - name: Check already-installed Edge through the actual collector
+        run: python scripts/run_browser_choice_acceptance.py
+      - name: Preserve exact check results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-choice-windows
+          retention-days: 7
+          path: browser-acceptance/browser-choice/

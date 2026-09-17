@@ -34,10 +34,11 @@ from .transport import diagnose_host
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
                              failed_report, probe_browser, safe_text, package_version)
 from .browser_install import install_commands, run_command
+from .browser_choice import BrowserChoice, CHOICES, validate_choice
 
 MESSAGES = {
     'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
-    'list_page_limit': '本任务列表页数已达到上限。新任务仍受站点共享配额限制。',
+    'list_page_limit': '本任务列表页数已达到上限。本任务仍受站点共享配额限制。',
     'operation_error': '操作未完成，已有结果保留。请检查环境与页面。',
     'new': '任务已保存。正在准备采集浏览器。',
     'browser_missing': '浏览器组件未就绪。请先点击“安装/修复采集浏览器”，完成后再打开任务。',
@@ -125,7 +126,16 @@ class GuidedService:
         self._last_install = 'not_started'
         self._restart_required = False
         self._health_probe, self._installer = health_probe, installer
-        self._browser_health = environment_report()
+        self._choice = BrowserChoice(workspace.root)
+        self._choice_error = ''
+        try:
+            self._choice_data = self._choice.read()
+            self._selected_browser = self._choice_data['selected']
+        except InputError as exc:
+            self._choice_data = {'selected': None, 'last_check': None}
+            self._selected_browser = None
+            self._choice_error = str(exc)
+        self._browser_health = {**environment_report(), 'browser_channel': self._selected_browser}
         self._setup = {'stage': 'idle', 'message': '请先检查浏览器；DNS检查与浏览器检查是两回事。', 'steps': []}
 
     def _path(self, ident):
@@ -186,6 +196,10 @@ class GuidedService:
             return {'jobs': jobs, 'busy': self._busy, 'active': self._active,
                     'sites': self.registry.describe(), 'limits': asdict(self.ledger.limits),
                     'browser_package': self._package(), 'installation': self._last_install,
+                    'installation_scope': 'current_process_actions_only_not_component_readiness',
+                    'browser_choice': {'selected': self._selected_browser, 'options': CHOICES,
+                                       'error': self._choice_error,
+                                       'last_check': self._choice.historical_view(self._choice_data, self._package())},
                     'browser_health': copy.deepcopy(self._browser_health), 'setup': copy.deepcopy(self._setup),
                     'python': sys.executable, 'roles': {k: v['label'] for k,v in self.workspace.config['roles'].items()},
                     'sessions_persisted': False, 'external_site_certification': False}
@@ -289,8 +303,13 @@ class GuidedService:
 
     def check_browser(self, data):
         if data:
-            raise InputError('检查不接受网址、命令或浏览器路径参数。')
-        self._submit_setup('check_browser')
+            if (not isinstance(data, dict) or set(data) != {'channel', 'consent'}
+                    or data.get('consent') is not True):
+                raise InputError('更换浏览器需明确确认；不接受网址、命令或路径。')
+            channel = validate_choice(data['channel'])
+            self._submit_setup('choose_browser', mode=channel)
+        else:
+            self._submit_setup('check_browser')
         return {'queued': True, 'network_scope': 'blank local page only; no job requests'}
 
     def _restart_report(self):
@@ -298,16 +317,43 @@ class GuidedService:
                 'ready': False, 'restart_required': True,
                 'message': HEALTH_MESSAGES['browser_restart_required']}
 
-    def _check_browser(self):
+    def _remember_check(self, report, channel, *, select=False):
+        try:
+            data = self._choice.record(report, channel, select=select)
+            self._choice_data = data
+            self._choice_error = ''
+            if select:
+                self._selected_browser = channel
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            # Optional history must not hide the actual probe result. A requested
+            # choice, however, cannot claim it was saved when the write failed.
+            self._choice_error = '本机检查历史或浏览器选择未能保存；原选择未更改。'
+            if select:
+                raise InputError(self._choice_error) from exc
+
+    def _check_browser(self, channel=None, *, select=False):
+        channel = channel or self._selected_browser
         if self._restart_required:
             report = self._restart_report()
             with self._lock:
                 self._browser_health = report
                 self._setup.update(stage='restart_required', message=report['message'])
             return report
-        with self._lock:
-            self._setup.update(stage='launch_check', message='正在实际打开并关闭空白采集浏览器，不访问招聘网站。')
-        report = self._health_probe()
+        if channel not in CHOICES:
+            report = failed_report(environment_report(), ValueError('invalid saved browser selection'),
+                                   code='browser_choice_invalid')
+        else:
+            with self._lock:
+                self._setup.update(stage='launch_check', message='正在实际打开并关闭所选浏览器空白页，不访问招聘网站。')
+            # No automatic fallback on failure, and no in-use context is replaced.
+            report = self._health_probe(**({'channel': channel} if channel != 'bundled' else {}))
+            report = {**report, 'browser_channel': channel}
+            with self._lock:
+                try:
+                    self._remember_check(report, channel, select=select and report['ready'] is True)
+                    report['selection_applied'] = select and report['ready'] is True
+                except InputError as exc:
+                    report = failed_report(report, exc, code='browser_choice_invalid')
         with self._lock:
             self._browser_health = report
             self._setup.update(stage='ready' if report['ready'] else 'failed', message=report['message'])
@@ -349,7 +395,7 @@ class GuidedService:
                 return
         # Zero exit codes are not proof of a usable browser. Verify the real
         # headed backend on the same owner thread before reporting installed.
-        report = self._check_browser()
+        report = self._check_browser(channel='bundled')
         self._last_install = ('restart_required' if self._restart_required else
                               'installed' if report['ready'] else 'installed_not_ready')
 
@@ -370,6 +416,9 @@ class GuidedService:
     def _backend(self, state):
         if self._restart_required:
             raise BrowserStartupError(self._restart_report())
+        if self._selected_browser not in CHOICES:
+            raise BrowserStartupError(failed_report(environment_report(),
+                ValueError('invalid saved browser selection'), code='browser_choice_invalid'))
         ident = state['id']
         previous = self._backends.get(ident)
         if previous and hasattr(previous, 'alive') and not previous.alive():
@@ -379,11 +428,13 @@ class GuidedService:
                 self._backends.pop(old).close()
             def progress(code, seconds):
                 self._save(state, code, wait_seconds=seconds)
-            self._backends[ident] = self.factory(self.registry.get(state['platform']), self.ledger, self._cancel, progress)
+            self._backends[ident] = self.factory(self.registry.get(state['platform']), self.ledger, self._cancel, progress,
+                **({'channel': self._selected_browser} if self._selected_browser != 'bundled' else {}))
             health = getattr(self._backends[ident], 'startup_report', None)
             if health:
                 with self._lock:
                     self._browser_health = dict(health)
+                    self._remember_check(health, self._selected_browser)
         return self._backends[ident]
 
     def _gather(self, state, backend, adapter, *, navigate=False, more=False):
@@ -606,6 +657,9 @@ class GuidedService:
                 if action == 'check_browser':
                     self._check_browser()
                     continue
+                if action == 'choose_browser':
+                    self._check_browser(secret, select=True)
+                    continue
                 state = self._load(ident)
                 from ..network_policy import use_policy
                 with use_policy(self.workspace.network_policy()):
@@ -614,7 +668,7 @@ class GuidedService:
                     self._cancel.set()
             except Exception as exc:
                 code = exc.code if isinstance(exc,CrawlError) else 'operation_error'
-                if action in {'install', 'check_browser'}:
+                if action in {'install', 'check_browser', 'choose_browser'}:
                     code = 'dependency_install_failed' if action == 'install' else 'browser_check_failed'
                     if action == 'install':
                         self._last_install = code
@@ -632,6 +686,7 @@ class GuidedService:
                         else:
                             if isinstance(exc, BrowserStartupError):
                                 self._browser_health = exc.report
+                                self._remember_check(exc.report, self._selected_browser)
                                 state['startup_diagnostic'] = exc.report
                             if isinstance(exc, RateLimit) and exc.next_allowed_at is not None:
                                 backend = self._backends.get(ident)

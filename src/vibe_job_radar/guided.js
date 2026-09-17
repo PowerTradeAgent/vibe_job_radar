@@ -7,7 +7,7 @@ if (token) sessionStorage.setItem('radar-session', token);
 if (location.hash) history.replaceState(null,'',location.pathname+location.search);
 let requestedTask=new URLSearchParams(location.search).get('task')||'';
 let state=null, current=null, selecting=new Set(), loadedId='', requesting=false, sticky='';
-const installationNames={restart_required:'组件更新后需重启工作台再检查',not_started:'尚未运行安装',installing:'正在安装',installed:'安装并启动验证成功',installed_not_ready:'安装命令成功，但启动检查失败',dependency_install_failed:'安装失败',dependency_install_timeout:'安装超时'};
+const installationNames={restart_required:'组件更新后需重启工作台再检查',not_started:'本次会话未执行安装（不表示缺少组件）',installing:'正在安装',installed:'安装并启动验证成功',installed_not_ready:'安装命令成功，但启动检查失败',dependency_install_failed:'安装失败',dependency_install_timeout:'安装超时'};
 const cardStatus={discovered:'待选择',opening:'读取中',ok:'正文已保存',structure_changed:'无法确认独立完整正文',invalid_job_data:'岗位字段无效或正文超出限制',not_job_url:'不是已识别的详情地址',manual_required:'需要正常登录或验证',http_401:'需要核对登录或权限',http_403:'站点拒绝访问',http_429:'来源要求等待',paused:'已暂停',network_error:'网络未完成'};
 const statusNames={queued:'准备中',running:'执行中',ready:'可以选择岗位',waiting_rate:'按来源要求等待',waiting_manual:'需要你处理',paused:'已暂停',completed:'批次结束',stopped:'已停止',interrupted:'上次服务已退出'};
 async function api(path,data){const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:{'X-Radar-Token':token,...(data===undefined?{}:{'Content-Type':'application/json'})},body:data===undefined?undefined:JSON.stringify(data),cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'操作失败');return result;}
@@ -17,10 +17,19 @@ function options(element,values){const value=element.value;element.replaceChildr
 function active(){if(!current)throw Error('先在第2步创建任务。');return current.id;}
 function render(){
  if(!state)return;
- $('environment').textContent=`当前 Python：${state.python}。Playwright：${state.browser_package||'尚未安装'}。安装状态：${installationNames[state.installation]||state.installation}。`;
+ $('environment').textContent=`当前 Python：${state.python}。Playwright：${state.browser_package||'尚未安装'}。本次组件操作：${installationNames[state.installation]||state.installation}。`;
+ const choice=state.browser_choice;
+ if(choice){
+  if(!$('browser-choice').options.length){options($('browser-choice'),Object.entries(choice.options));$('browser-choice').value=choice.selected||'bundled';}
+  const previous=choice.last_check;
+  $('browser-history').textContent=choice.error || (previous
+   ? `上次组件检查（历史，不代表本次就绪）：${previous.checked_at} · ${choice.options[previous.channel]||previous.channel} · Playwright ${previous.playwright_version} · ${previous.code}${previous.exit_hex?' · '+previous.exit_hex:''}。${previous.matches_environment?'同一解释器和SDK；仍需本次检查。':'环境或SDK已变化；不能沿用旧结果。'}`
+   : '尚无已保存的组件检查记录；不表示未安装，也不会自动安装。');
+  $('browser-selected').textContent='当前采集浏览器：'+(choice.options[choice.selected]||'尚无法读取选择')+'。更换须空白页检查通过；不接管日常浏览器或保存其登录态。';
+ }
  const health=state.browser_health;
- if(health){$('browser-summary').textContent=health.message+(health.warnings?.length?'\n'+health.warnings.join('\n'):'');
- $('browser-diagnostic').textContent=JSON.stringify({browser:health,installation:state.setup},null,2);}
+ if(health){$('browser-summary').textContent=(health.browser_channel ? '本次检查：'+(choice?.options[health.browser_channel]||health.browser_channel)+'。' : '')+health.message;
+ $('browser-diagnostic').textContent=JSON.stringify({browser:health,installation:state.setup,choice},null,2);}
  if(!$('site').options.length)options($('site'),state.sites.map(s=>[s.key,s.label+'（实站未验证）']));
  if(!$('role').options.length){options($('role'),Object.entries(state.roles));$('role').value='time_series';}
  if(!intakeApplied){
@@ -62,6 +71,11 @@ $('task').addEventListener('change',()=>{loadedId='';render();});
 for(const [button,action] of Object.entries({'login':'login','capture':'capture','search-again':'search','pause':'pause','resume':'resume','stop':'stop'}))$(button).addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action})));
 $('collect').addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action:'collect',selected:[...selecting]})));
 $('select-all').addEventListener('click',()=>{if(!current)return;selecting=new Set(current.cards.slice(0,current.max_jobs).map(c=>c.id));renderCards();});
+$('use-browser-choice').addEventListener('click',()=>{
+ const channel=$('browser-choice').value;
+ if(confirm('将用所选浏览器打开独立空白页；只有检查通过后才保存选择，后续采集沿用原网络和访问规则。不安装系统浏览器、不接管日常标签页或登录资料；已有采集会话需先停止。是否继续？'))
+  act(()=>api('/api/guided/check_browser',{channel,consent:true}));
+});
 $('check-browser').addEventListener('click',()=>act(()=>api('/api/guided/check_browser',{})));
 $('copy-browser-diagnostic').addEventListener('click',()=>act(async()=>{const text=$('browser-diagnostic').textContent;try{await navigator.clipboard.writeText(text);sticky='诊断已复制；分享前可遮住本机用户名。';}catch{const selection=getSelection();const range=document.createRange();range.selectNodeContents($('browser-diagnostic'));selection.removeAllRanges();selection.addRange(range);sticky='浏览器未允许自动复制；已选中诊断，请按 Ctrl+C。';}}));
 $('install').addEventListener('click',()=>{if(confirm('将使用当前Python检查/安装Playwright，并通过Playwright下载配套Chromium，然后实际打开空白浏览器验证。不会访问招聘网站；现有登录会话需先停止。是否继续？'))act(()=>api('/api/guided/install',{consent:true}));});
