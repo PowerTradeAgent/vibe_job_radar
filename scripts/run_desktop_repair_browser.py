@@ -46,14 +46,22 @@ def main():
                         context.route('**/*',lambda route:route.continue_() if route.request.url.startswith(server.origin+'/') else route.abort())
                         page=context.new_page();page.on('pageerror',lambda e:result['page_errors'].append(str(e)))
                         page.on('dialog',lambda d:d.accept())
-                        page.goto(server.entry_url);page.locator('a[href="/guided"]').click()
+                        response=page.goto(server.entry_url)
+                        assert response is not None
+                        csp=response.headers.get('content-security-policy','')
+                        assert "script-src 'self'" in csp and "'unsafe-eval'" not in csp
+                        result['content_security_policy']=csp
+                        result['checks'].append('application script policy remains self-only without unsafe-eval')
+                        page.locator('a[href="/guided"]').click()
                         page.locator('#check-browser').click()
                         expect(page.locator('#browser-summary')).to_contain_text('堆损坏异常',timeout=15000)
                         expect(page.locator('#browser-summary')).to_contain_text('并非未安装')
                         page.locator('summary').filter(has_text='浏览器诊断').click()
                         expect(page.locator('#browser-diagnostic')).to_contain_text('0xC0000374')
                         page.locator('#repair-browser').click()
-                        page.wait_for_function("document.querySelector('#environment').textContent.includes('启动检查失败')")
+                        # Wait on the rendered text with Playwright's retrying assertion.
+                        # String evaluation here fails under the application's strict CSP.
+                        expect(page.locator('#environment')).to_contain_text('启动检查失败',timeout=30000)
                         assert calls==[[sys.executable,'-m','playwright','install','--force','chromium']]
                         assert not server.guided.state()['browser_health']['ready']
                         result['checks'].append('native crash is not missing files; re-download uses --force and zero exit alone does not claim launch success')
@@ -88,7 +96,7 @@ def main():
                         assert not server.guided.state()['browser_health']['ready']
                         page.reload();expect(page.locator('#browser-summary')).to_contain_text('重新启动工作台')
                         page.set_viewport_size({'width':390,'height':844})
-                        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                        assert page.evaluate('() => document.documentElement.scrollWidth <= innerWidth')
                         assert not result['page_errors'];assert not server.workspace.db.exists()
                         result['checks'].append('explicit SDK update requires process restart; recheck/reload never reuse stale SDK as success; narrow viewport fits')
                         result['success']=True
