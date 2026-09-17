@@ -105,6 +105,9 @@ async function download(runId, name) {
 }
 function renderBrief(report) {
   const brief = report.manifest.research_brief;
+  const acquisition = report.manifest.acquisition_outcome;
+  $('brief-acquisition').hidden = !acquisition;
+  $('brief-acquisition').textContent = acquisition ? acquisition.message + ` 所选 ${acquisition.selected} 条；正文保存 ${acquisition.saved} 条；失败 ${acquisition.failed} 条，待处理 ${acquisition.pending} 条。` : '';
   $('research-brief').hidden = !brief;
   $('evidence-next').hidden = report.manifest.mode !== 'real_sample' || !report.manifest.stats.full_text_job_groups;
   $('evidence-next').href = '/advanced#report=' + report.id;
