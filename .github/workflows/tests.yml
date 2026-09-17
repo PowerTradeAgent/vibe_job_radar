@@ -1,9 +1,17 @@
 name: offline-tests
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
   test:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -27,12 +35,13 @@ jobs:
         run: |
           python -m pip install --no-deps .
           vibe-radar-ui --doctor --workspace .ci-installed-workspace
-          python -c "import importlib.metadata as m; from vibe_job_radar import __version__; assert m.version('vibe-job-radar') == __version__ == '0.2.0'"
+          python -c "import importlib.metadata as m; from vibe_job_radar import __version__; assert m.version('vibe-job-radar') == __version__"
           python -c "from importlib.resources import files; p=files('vibe_job_radar'); assert p.joinpath('workbench.html').is_file(); assert p.joinpath('workbench.js').is_file()"
       - name: Save test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: acceptance-${{ matrix.os }}-${{ matrix.python }}
           path: acceptance/
       - name: Create source archive
@@ -42,5 +51,6 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: source-checkout
           path: vibe-job-radar-source.zip

@@ -208,7 +208,11 @@ class PublisherTaskRecoveryTests(unittest.TestCase):
     setUp = guided_fixtures.ServiceTests.setUp
     create = guided_fixtures.ServiceTests.create
     wait = guided_fixtures.ServiceTests.wait
-    job = guided_fixtures.ServiceTests.job
+    def job(self, ident):
+        # Poll through the public, lock-protected snapshot. The private _load()
+        # helper is for the owning worker / callers already holding _lock.
+        # Opening its JSON while the worker os.replace()s it races on Windows.
+        return next(item for item in self.service.state()['jobs'] if item['id'] == ident)
     def test_partial_report_due_selection_and_automatic_resume(self):
         ident = self.create(max_pages=2)
         rows = self.job(ident)['cards']; selected = [c['id'] for c in rows]
@@ -230,7 +234,8 @@ class PublisherTaskRecoveryTests(unittest.TestCase):
         now[0] += 90
         deadline = time.monotonic()+5
         while self.job(ident)['status'] != 'completed' and time.monotonic() < deadline: time.sleep(.02)
-        self.assertEqual(self.job(ident)['status'], 'completed')
+        finished = self.job(ident)
+        self.assertEqual(finished['status'], 'completed', finished)
         self.assertEqual(sum('/job/1' in url for url in backend.opens), 1)
         self.assertTrue(all(c['status']=='ok' for c in self.job(ident)['cards']))
 

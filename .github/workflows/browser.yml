@@ -3,6 +3,9 @@ on:
   pull_request:
   push:
     branches: [main]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
@@ -32,12 +35,23 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: browser-acceptance
           path: browser-acceptance/
+      - name: Verify exact source before building candidate
+        run: python scripts/verify_candidate.py
+      - name: Save source verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          retention-days: 7
+          name: source-verification
+          path: release-verification/
       - name: Build source release candidate
         run: python scripts/build_candidate.py
       - name: Save source release candidate
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: source-release-candidate
           path: release-candidate/

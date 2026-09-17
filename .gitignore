@@ -140,3 +140,10 @@ playwright/.auth/
 # Generated development acceptance artifacts, never source or login state.
 browser-acceptance/
 live-evidence/
+
+# Source-bound local validation output, never application input.
+release-verification/
+release-candidate/
+
+# Locally generated reports, never source payload.
+/runs/
