@@ -18,6 +18,7 @@
 <p>免账号、免 Key、免采集浏览器。从官方公开接口获取一条 Anthropic Technical Architect 岗位并在本机生成报告。来源可能下架；它不是 BOSS 数据，也不是合成演示。</p>
 <button id="public-example" type="button">联网获取真实公开案例</button>
 <p id="public-status" role="status" aria-live="polite">点击确认前不联网。登录态、简历、个人证据和私人报告保留本地。</p>
+<p id="public-changes" role="status" aria-live="polite" hidden></p>
 <details open><summary>按岗位查询公开来源（默认本机运行，无需自建服务器）</summary><p id="public-service-status"></p><details><summary>高级网络诊断（只读）</summary><pre id="public-network"></pre></details>
 <form id="public-search"><label>查询词<input name="query" maxlength="200" required placeholder="例如 Architect、Engineer；按原文关键词匹配"></label>
 <label>地区<input name="region" maxlength="100"></label><label>来源<select id="public-source" name="source" required></select></label>

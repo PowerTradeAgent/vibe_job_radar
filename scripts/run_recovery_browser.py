@@ -4,6 +4,7 @@ Real public GET is separately exercised by check_live_public_example.py --live.
 The local server adds only consent-based task handoff endpoints; no password or arbitrary remote-target endpoints.
 """
 import contextlib
+import copy
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import runpy
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -49,6 +51,7 @@ def local_query_journey(pw, options, result, out):
             for i in range(21)],'meta':{'total':21}}
     with tempfile.TemporaryDirectory() as tmp:
         server=LocalServer(Workspace(tmp))
+        now=[time.time()];server.public_tasks.hybrid.clock=lambda:now[0]
         thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);thread.start()
         try:
             with patch.object(SafeHTTP,'json',return_value=board) as source:
@@ -67,6 +70,7 @@ def local_query_journey(pw, options, result, out):
                 page.locator('#public-search-button').click()
                 expect(page.locator('#public-status')).to_contain_text('本页 20 条',timeout=30000)
                 expect(page.locator('#public-status')).to_contain_text('匹配 21 条')
+                expect(page.locator('#public-changes')).to_contain_text('不将首次记录算作新增')
                 expect(page.locator('#public-next')).to_be_visible()
                 first=server.public_tasks.state()['task']
                 assert first['report_id'] and first['next_cursor'] and first['execution_mode']=='local_direct'
@@ -79,6 +83,28 @@ def local_query_journey(pw, options, result, out):
                 page.reload()
                 expect(page.locator('#public-status')).to_contain_text('本页 1 条')
                 source.assert_called_once_with(API_URL)
+                changed=copy.deepcopy(board)
+                changed['jobs'].pop(1)
+                changed['jobs'][0]['content']+='<p>New artificial responsibility.</p>'
+                new_job=copy.deepcopy(board['jobs'][1])
+                new_job.update(id=880099,absolute_url='https://job-boards.greenhouse.io/anthropic/jobs/880099')
+                changed['jobs'].append(new_job);source.return_value=changed
+                now[0]+=601
+                # Reload resets form values: explicitly confirm this later query.
+                page.locator('#public-search [name=query]').fill('Architect')
+                page.locator('#public-search [name=consent]').check()
+                page.locator('#public-search-button').click()
+                expect(page.locator('#public-changes')).to_contain_text('新增 1 条，修改 1 条，本次未出现 1 条，未变 19 条',timeout=30000)
+                expect(page.locator('#public-changes')).to_contain_text('不等于岗位已关闭')
+                third=server.public_tasks.state()['task']
+                assert third['status']=='completed' and third['report_id']!=second['report_id']
+                audit=server.workspace.root/'reports'/third['report_id']/'catalog_changes.json'
+                assert json.loads(audit.read_text(encoding='utf-8'))['missing']==['880001']
+                assert source.call_count==2
+                page.reload()
+                expect(page.locator('#public-changes')).to_contain_text('修改 1 条')
+                assert source.call_count==2
+                result['checks'].append('complete catalog audit: baseline is not additions; explicit later fetch yields 1 added/1 modified/1 missing/19 unchanged; report audit persists and reload does not fetch; missing is not closure')
                 page.set_viewport_size({'width':390,'height':844})
                 assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
                 page.screenshot(path=str(out/'local-public-query.png'),full_page=True)
