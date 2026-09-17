@@ -1,7 +1,7 @@
 """Bounded DNS wire codec for A/AAAA over an authenticated DoH connection.
 
 Not a general recursive resolver or a DNSSEC verifier. Only addresses belonging
-to the requested name's CNAME chain can be returned. Additional data is never a
+ to the requested name's CNAME chain can be returned. Additional data is never a
 connection target. RFC 1035 / 8484; no external package or network in this module.
 """
 from __future__ import annotations
@@ -14,8 +14,9 @@ from dataclasses import dataclass
 
 
 class ResolutionError(RuntimeError):
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, diagnostic: dict | None = None):
         self.code = code
+        self.diagnostic = diagnostic
         super().__init__(code)
 
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import socket
+import ssl
 import sys
 import tempfile
 import threading
@@ -17,7 +18,8 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from vibe_job_radar.guided.browser_health import environment_report,failed_report
 from vibe_job_radar.guided.browser_install import CommandResult
-from vibe_job_radar.dns_wire import Answer
+from vibe_job_radar.dns_wire import Answer, ResolutionError
+from vibe_job_radar.tls_diagnostic import failure_details
 from vibe_job_radar.network_policy import NetworkPolicy
 from vibe_job_radar.workspace import Workspace
 from vibe_job_radar.workbench import LocalServer
@@ -86,6 +88,22 @@ def main():
                             assert ex.call_count==2
                             assert server.guided.ledger.summary('liepin')['request']['day']==0
                             result['checks'].append('raw Fake-IP and effective public DNS displayed separately only after saved consent; no target request or browser readiness claim')
+                            # An artificial certificate exception validates visible
+                            # diagnostic propagation; no trust or routing is changed.
+                            server.workspace.dns_resolver.clear()
+                            failure=ssl.SSLCertVerificationError(1,'PRIVATE discarded message')
+                            failure.verify_code=20;failure.reason='CERTIFICATE_VERIFY_FAILED'
+                            details=failure_details(failure,phase='tls_handshake')
+                            ex.side_effect=ResolutionError('encrypted_dns_tls_failed',diagnostic=details)
+                            page.locator('#network').click()
+                            expect(page.locator('#diagnostic')).to_contain_text('certificate_verification')
+                            expect(page.locator('#diagnostic')).to_contain_text('"verify_code": 20')
+                            expect(page.locator('#diagnostic')).not_to_contain_text('PRIVATE')
+                            page.locator('#network').click()
+                            expect(page.locator('#diagnostic')).to_contain_text('上次失败证据')
+                            assert ex.call_count==3
+                            assert server.guided.ledger.summary('liepin')['request']['day']==0
+                            result['checks'].append('TLS category and verify code visible; raw error not exported; repeated diagnostic reuses failure without another exchange')
                         page.screenshot(path=str(out/'desktop-blockers.png'),full_page=True)
                         page.locator('#upgrade-browser').click()
                         expect(page.locator('#browser-summary')).to_contain_text('重新启动工作台',timeout=15000)
