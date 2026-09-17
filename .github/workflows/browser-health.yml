@@ -40,10 +40,14 @@ jobs:
         run: python -m playwright install --with-deps chromium
       - name: Exercise visible collector check on Windows
         if: runner.os == 'Windows'
-        run: python scripts/run_browser_health_acceptance.py
+        run: |
+          python scripts/run_browser_health_acceptance.py
+          python scripts/run_desktop_repair_browser.py
       - name: Exercise visible collector check on Linux desktop
         if: runner.os == 'Linux'
-        run: xvfb-run -a python scripts/run_browser_health_acceptance.py
+        run: |
+          xvfb-run -a python scripts/run_browser_health_acceptance.py
+          xvfb-run -a python scripts/run_desktop_repair_browser.py
       - name: Keep startup evidence
         if: always()
         uses: actions/upload-artifact@v4

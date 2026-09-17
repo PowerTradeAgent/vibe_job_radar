@@ -22,9 +22,26 @@ class CommandResult:
     cancelled: bool = False
 
 
-def install_commands() -> tuple[tuple[str, list[str]], ...]:
-    return (('package_install', [sys.executable, '-m', 'pip', 'install', PLAYWRIGHT_REQUIREMENT, VERSION_CHECK_REQUIREMENT]),
-            ('browser_download', [sys.executable, '-m', 'playwright', 'install', 'chromium']))
+def install_commands(mode='ensure') -> tuple[tuple[str, list[str]], ...]:
+    """Fixed modes, never an arbitrary command/path/version from the client.
+
+    'ensure' keeps the historical first-install behavior. 'reinstall' actually
+    replaces the matching browser, without changing the shared Python SDK.
+    'upgrade' is a separate explicitly confirmed update of SDK and matched build.
+    """
+    if mode not in {'ensure', 'reinstall', 'upgrade'}:
+        raise ValueError('invalid browser installation mode')
+    browser = [sys.executable, '-m', 'playwright', 'install']
+    if mode != 'ensure':
+        browser.append('--force')
+    browser.append('chromium')
+    if mode == 'reinstall':
+        return (('browser_download', browser),)
+    package = [sys.executable, '-m', 'pip', 'install']
+    if mode == 'upgrade':
+        package.append('--upgrade')
+    package.extend([PLAYWRIGHT_REQUIREMENT, VERSION_CHECK_REQUIREMENT])
+    return (('package_install', package), ('browser_download', browser))
 
 
 def _stop_process(proc: subprocess.Popen) -> None:
