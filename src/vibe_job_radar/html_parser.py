@@ -5,7 +5,9 @@ import re
 from dataclasses import dataclass, field
 from html import unescape
 from html.parser import HTMLParser
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
+from .utils import canonical_url
+from .url_safety import credential_query_key
 
 
 class ParseError(ValueError):
@@ -81,11 +83,70 @@ def jobpostings(value, depth=0):
             yield from jobpostings(child, depth + 1)
 
 
+def _unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ParseError("duplicate structured-data field")
+        value[key] = item
+    return value
+
+
+def _posting_identity(posting: dict, source_url: str) -> list[str]:
+    """Read identity only. Never follow metadata URLs or equate different paths."""
+    refs = []
+    for key in ("url", "mainEntityOfPage"):
+        value = posting.get(key)
+        if value is None:
+            continue
+        if isinstance(value, dict):
+            # Conflicting declarations remain visible to the matching rule.
+            values = [value[k] for k in ("@id", "url") if k in value]
+        else:
+            values = [value]
+        if not values:
+            raise ParseError("unusable structured identity")
+        refs.extend(values)
+    if not refs and isinstance(posting.get("@id"), str):
+        value = posting["@id"]
+        if value.startswith(("https://", "http://", "/", "#")):
+            refs.append(value)
+    normalized = []
+    for value in refs:
+        if (not isinstance(value, str) or not value.strip() or len(value) > 2048
+                or "\\" in value or any(ord(c) < 32 for c in value)):
+            raise ParseError("invalid structured identity")
+        try:
+            target = urljoin(source_url, value)
+            if any(credential_query_key(k) for k, _ in parse_qsl(urlsplit(target).query)):
+                raise ValueError("credential identity")
+            normalized.append(canonical_url(target))
+        except ValueError as exc:
+            raise ParseError("invalid structured identity") from exc
+    return normalized
+
+
+def _select_posting(postings: list[dict], source_url: str) -> dict:
+    unique = list({json.dumps(x, sort_keys=True, ensure_ascii=False): x for x in postings}.values())
+    if not source_url:
+        if len(unique) != 1:
+            raise ParseError("multiple JobPosting objects: no source identity")
+        return unique[0]
+    target = canonical_url(source_url)
+    identities = [(p, _posting_identity(p, source_url)) for p in unique]
+    matches = [p for p, refs in identities if refs and all(ref == target for ref in refs)]
+    if len(matches) == 1:
+        return matches[0]
+    if len(unique) == 1 and not identities[0][1]:
+        return unique[0]  # Existing single-posting documents without identity.
+    raise ParseError("ambiguous or mismatching JobPosting identity")
+
+
 def parse_job_html(markup: str, *, source_url: str = "") -> dict:
     """Return only an isolated JD, never the entire body or search recommendations."""
     if source_url and urlsplit(source_url).path in {"", "/"}:
         raise ParseError("homepage is not a job-detail URL")
-    if re.search(r"请完成.{0,12}验证|滑动.{0,8}验证|安全验证|captcha|登录后.{0,8}(?:查看|浏览)", markup, re.I):
+    if re.search(r"请完成.{0,12}验证|滑动.{0,8}验证|安全验证|captcha|登录后.{0,8}(?:查看|浏览)", plain_text(markup), re.I):
         raise ParseError("login/challenge page")
     doc = Document(markup)
     nodes = list(doc.root.walk())
@@ -93,17 +154,15 @@ def parse_job_html(markup: str, *, source_url: str = "") -> dict:
     for node in nodes:
         if node.tag == "script" and (node.attrs.get("type") or "").lower() == "application/ld+json":
             try:
-                structured.extend(jobpostings(json.loads(node.text(include_script=True))))
+                structured.extend(jobpostings(json.loads(node.text(include_script=True), object_pairs_hook=_unique_object)))
             except (json.JSONDecodeError, TypeError):
                 continue
-    # Identical scripts are common; different postings imply a list/recommendations page.
-    unique = {json.dumps(x, sort_keys=True, ensure_ascii=False): x for x in structured}
-    if len(unique) > 1:
-        raise ParseError("multiple JobPosting objects: isolate one posting before import")
-    if unique:
-        posting = next(iter(unique.values()))
-        text = plain_text(str(posting.get("description") or ""))
-        title = unescape(str(posting.get("title") or "")).strip()
+    if structured:
+        posting = _select_posting(structured, source_url)
+        description, title = posting.get("description"), posting.get("title")
+        if not isinstance(description, str) or not isinstance(title, str):
+            raise ParseError("JobPosting title and description must be text")
+        text, title = plain_text(description), unescape(title).strip()
         if len(text) < 20 or not title:
             raise ParseError("incomplete JobPosting description/title")
         org = posting.get("hiringOrganization") or {}

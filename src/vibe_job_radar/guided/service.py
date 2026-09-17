@@ -77,6 +77,7 @@ MESSAGES = {
     'redirect_requires_attention': '目标重定向无法安全处理，请到采集浏览器确认页面。',
     'login_origin_changed': '页面离开了该平台允许的登录域名，未填入账号密码。请人工确认。',
     'not_job_list': '当前是登录页、首页或职位详情，不是本次搜索列表；没有把推荐岗位当成搜索结果。登录完成后点“继续原任务”返回原搜索，已选岗位和已取得正文保留。',
+    'invalid_job_data': '此条正文或字段不符合岗位数据格式，未截断或冒充成功；本批其他岗位继续处理。',
     'not_job_url': '当前页面不是适配器识别的职位详情；没有保存为完整 JD。',
     'wrong_platform': '页面不属于所选平台，请在同一平台重新搜索。',
     'credential_url': '链接含疑似凭据参数，未保存。请使用无登录凭据的稳定职位链接。',
@@ -256,6 +257,7 @@ class GuidedService:
                 raise InputError('请选择列表中的岗位，不能超过本批数量上限。')
             state['selection'] = ids
             state['report_id'] = ''
+            state.pop('outcome', None)
             state['phase'] = 'collect'
         with self._lock:
             if self._busy:
@@ -407,17 +409,20 @@ class GuidedService:
                     page = backend.open(row['url'])
                     final_url = adapter.accept_url(page.url, detail=True)
                     parsed = adapter.detail(page)
-                    record = JobRecord(**parsed, url=final_url, platform=adapter.key,
-                        source_mode='browser_fetch', rights_note=state['rights_note'],
-                        source_ref=f"guided:{state['id']}:{row['id']}",
-                        raw_sha256=hashlib.sha256(page.html.encode()).hexdigest())
+                    try:
+                        record = JobRecord(**parsed, url=final_url, platform=adapter.key,
+                            source_mode='browser_fetch', rights_note=state['rights_note'],
+                            source_ref=f"guided:{state['id']}:{row['id']}",
+                            raw_sha256=hashlib.sha256(page.html.encode()).hexdigest())
+                    except (TypeError, ValueError) as exc:
+                        raise CrawlError('invalid_job_data') from exc
                     with writer_lock(self.workspace.root), Store(self.workspace.db) as store:
                         store.add(record)
                     row.update(status='ok', record_id=record.record_id, resolved_url=final_url, title=record.title)
                 except CrawlError as exc:
                     row['status'] = exc.code
                     self._save(state)
-                    if exc.code not in {'structure_changed','not_job_url'}:
+                    if exc.code not in {'structure_changed','not_job_url','invalid_job_data'}:
                         raise
                 self._save(state)
         finally:
@@ -425,29 +430,69 @@ class GuidedService:
             self._finalize_report(state, adapter)
         self._save(state, 'completed', status='completed', phase='report')
 
+    @staticmethod
+    def _outcome(state, manifest=None):
+        rows = [c for c in state['cards'] if c['id'] in set(state['selection'])]
+        saved = sum(c['status'] == 'ok' for c in rows)
+        waiting = {'discovered', 'opening', 'manual_required', 'paused', 'rate_wait',
+                   'publisher_wait', 'cooldown', 'http_429', 'hourly_limit', 'daily_limit'}
+        pending = sum(c['status'] in waiting for c in rows)
+        failed = len(rows) - saved - pending
+        stats = (manifest or {}).get('stats', {})
+        target_jobs = stats.get('full_text_job_groups', 0)
+        ai_jobs = stats.get('vibe_evidence_job_groups', 0)
+        if not saved:
+            status, message = 'no_data', '本批尚未取得可用正文；任务结束不等于岗位研究完成。'
+        elif not manifest or manifest.get('status') != 'completed':
+            status, message = 'analysis_incomplete', '已有正文，但分析未完整完成，请先核对错误。'
+        elif not target_jobs:
+            status, message = 'no_target', '正文已保存，但没有纳入本次目标岗位；请核对岗位方向和原文，不用其他岗位冒充结果。'
+        elif not ai_jobs:
+            status, message = 'no_ai_evidence', '已取得目标岗位正文，未提取到已接收的正向 AI 编程证据；可复核原文，不表示市场没有需求。'
+        elif failed or pending:
+            status, message = 'partial', '部分目标岗位已形成研究结果；仍有未完成条目，报告不会把它们隐去。'
+        else:
+            status, message = 'ready', '本批目标岗位正文与研究结果已就绪，可查看原文并继续本人证据。'
+        return {'schema_version': 1, 'status': status, 'message': message,
+                'selected': len(rows), 'saved': saved, 'failed': failed, 'pending': pending,
+                'target_jobs': target_jobs, 'ai_jobs': ai_jobs,
+                'scope': 'selected batch only; saved is not target match or live-site certification'}
+
     def _finalize_report(self, state, adapter):
         selected = set(state['selection'])
-        if any(c['status']=='ok' and c['id'] in selected for c in state['cards']):
-            from ..pipeline import analyze
-            with writer_lock(self.workspace.root):
-                report_id = uuid.uuid4().hex
-                selected_records = {c['record_id'] for c in state['cards'] if c['id'] in selected and c['status']=='ok'}
-                with Store(self.workspace.db) as store:
-                    records = [r for r in store.records(latest_only=False) if r.record_id in selected_records]
-                with tempfile.TemporaryDirectory(prefix='.batch-',dir=self.root) as tmp:
-                    batch_db = Path(tmp)/'batch.sqlite'
-                    with Store(batch_db) as batch:
-                        for record in records:
-                            batch.add(record)
-                    # A plugin need not edit the global platform catalogue. Preserve
-                    # its metadata in this report's own effective configuration.
-                    config = copy.deepcopy(self.workspace.config)
-                    config['platforms'].setdefault(adapter.key,
-                        {'label': adapter.label, 'domains': list(adapter.domains)})
-                    analyze(batch_db, self.workspace.root/'reports'/report_id,
-                            config=config, role_filter=state['roles'], platform_filter=[adapter.key])
-            self._save(state, report_id=report_id,
-                       report_scope='exact successful selected records in this batch')
+        if not any(c['status']=='ok' and c['id'] in selected for c in state['cards']):
+            self._save(state, outcome=self._outcome(state), report_id='')
+            return
+        from ..pipeline import analyze
+        with writer_lock(self.workspace.root):
+            report_id = uuid.uuid4().hex
+            report_root = self.workspace.root/'reports'/report_id
+            selected_records = {c['record_id'] for c in state['cards'] if c['id'] in selected and c['status']=='ok'}
+            with Store(self.workspace.db) as store:
+                records = [r for r in store.records(latest_only=False) if r.record_id in selected_records]
+            with tempfile.TemporaryDirectory(prefix='.batch-',dir=self.root) as tmp:
+                batch_db = Path(tmp)/'batch.sqlite'
+                with Store(batch_db) as batch:
+                    for record in records:
+                        batch.add(record)
+                config = copy.deepcopy(self.workspace.config)
+                config['platforms'].setdefault(adapter.key,
+                    {'label': adapter.label, 'domains': list(adapter.domains)})
+                manifest = analyze(batch_db, report_root, config=config,
+                    role_filter=state['roles'], platform_filter=[adapter.key])
+            outcome = self._outcome(state, manifest)
+            audit = {'schema_version': 1, 'task_id': state['id'],
+                     'adapter': {'key': adapter.key, 'version': getattr(adapter, 'version', 'custom')},
+                     'outcome': outcome, 'items': [
+                         {k: c.get(k, '') for k in ('id', 'url', 'resolved_url', 'status', 'record_id')}
+                         for c in state['cards'] if c['id'] in selected]}
+            audit_path = report_root/'guided_acquisition.json'
+            atomic_json(audit_path, audit)
+            manifest['acquisition_outcome'] = outcome
+            manifest['output_files_sha256'][audit_path.name] = hashlib.sha256(audit_path.read_bytes()).hexdigest()
+            atomic_json(report_root/'run_manifest.json', manifest)
+        self._save(state, report_id=report_id, outcome=outcome,
+                   report_scope='exact successful selected records in this batch')
 
     def _run(self, action, state, secret):
         if action == 'close':
