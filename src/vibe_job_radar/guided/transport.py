@@ -19,7 +19,7 @@ from urllib.robotparser import RobotFileParser
 
 from ..network import FetchError, PinnedHTTPSConnection, USER_AGENT, validate_public_url, validate_url_target
 from ..utils import domain_matches
-from ..network_policy import current_policy, use_policy
+from ..network_policy import NetworkPolicy, current_policy, use_policy
 from .contracts import CrawlError
 from .rate import RateLedger, RateLimit
 
@@ -52,7 +52,7 @@ class PinnedTransport:
     def __init__(self, adapter, ledger: RateLedger, cancelled: threading.Event,
                  progress=lambda *_: None, *, max_inline_wait=30):
         self.adapter, self.ledger, self.cancelled, self.progress = adapter, ledger, cancelled, progress
-        self.network_policy = None  # Freeze the route at the first actual request.
+        self.network_policy = None  # Backend binds before callback dispatch; standalone callers stay lazy.
         self.domains = set((*adapter.domains, *adapter.resource_domains))
         if (isinstance(max_inline_wait, bool) or not isinstance(max_inline_wait, (int, float))
                 or not math.isfinite(max_inline_wait) or not 0 <= max_inline_wait <= 60):
@@ -61,6 +61,19 @@ class PinnedTransport:
         self.robots = {}
         self.blocked = set()
         self.retry_until = {}
+
+    def bind_policy(self, policy: NetworkPolicy) -> None:
+        """Bind on the session owner's context, before Playwright starts callbacks.
+
+        Sync Playwright dispatches routes on a different greenlet/context. Reading
+        current_policy() there can lose workspace consent and its shared resolver.
+        An already-bound session cannot be repurposed for another policy.
+        """
+        if not isinstance(policy, NetworkPolicy):
+            raise TypeError('expected a network policy snapshot')
+        if self.network_policy is not None and self.network_policy is not policy:
+            raise ValueError('browser session network policy is already bound')
+        self.network_policy = policy
 
     def reserve(self, kind: str, *, origin=None) -> None:
         deadline = time.monotonic() + self.max_inline_wait
