@@ -166,7 +166,14 @@ def main():
                         assert CALLS.count(('GET','/job/1.shtml'))==1 and CALLS.count(('GET','/job/2.shtml'))==2
                         assert CALLS.count(('POST','/native-login'))==2
                         assert workspace.report_file(first_report,'run_manifest.json').is_file()
-                        assert workspace.report(finished['report_id'])['manifest']['stats']['full_text_job_groups']==1  # identical artificial JDs deduplicate
+                        report=workspace.report(finished['report_id'])
+                        result['batch_stats']=report['manifest']['stats']
+                        # Unknown employers intentionally do not deduplicate across
+                        # distinct URLs, even when the artificial JD text matches.
+                        assert result['batch_stats']['full_text_job_groups']==2, result['batch_stats']
+                        assert result['batch_stats']['current_source_records']==2, result['batch_stats']
+                        assert {c['resolved_url'] for c in finished['cards']} == {
+                            'https://jobs.fixture.test/job/1.shtml', 'https://jobs.fixture.test/job/2.shtml'}
                         result['checks'].append('login during details resumes only failed selection, preserves first body and partial report')
                         page.locator('a[href="/#report='+finished['report_id']+'"]').click()
                         expect(page.locator('#brief-conclusion')).to_contain_text('已形成本批')

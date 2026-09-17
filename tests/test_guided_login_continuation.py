@@ -66,6 +66,22 @@ class ListSurfaceTests(unittest.TestCase):
                          '<aside><a href="/job/99">广告</a></aside>')
         self.assertEqual([c.url for c in a.cards(p)], ['https://jobs.fixture.test/job/1'])
 
+    def test_matching_detail_text_without_company_keeps_distinct_job_urls(self):
+        from vibe_job_radar.models import JobRecord
+        a = builtins().get('liepin')
+        markup = ('<h1>时间序列算法工程师</h1><div class="job-description">'
+                  '使用 Cursor 进行 AI 辅助编程，编写单元测试和代码审查；负责时间序列预测。人工测试正文。</div>')
+        records = []
+        for ident in (1, 2):
+            url = f'https://www.liepin.com/job/{ident}.shtml'
+            data = a.detail(PageSnapshot(url, markup))
+            record = JobRecord(**data, url=url, platform='liepin', source_mode='browser_fetch',
+                               rights_note='人工测试输入')
+            self.assertEqual(record.company, '')
+            records.append(record)
+        self.assertEqual(records[0].text, records[1].text)
+        self.assertNotEqual(records[0].fingerprint, records[1].fingerprint)
+
     def test_site_explicitly_using_root_as_search_is_supported(self):
         a = dataclasses.replace(fixture_adapter(), search_base='https://jobs.fixture.test/')
         self.assertEqual(len(a.cards(PageSnapshot(a.search_url('x'), listing().html))), 1)
