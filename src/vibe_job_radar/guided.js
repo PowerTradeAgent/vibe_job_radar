@@ -18,6 +18,11 @@ function active(){if(!current)throw Error('先在第2步创建任务。');return
 function render(){
  if(!state)return;
  $('environment').textContent=`当前 Python：${state.python}。Playwright：${state.browser_package||'尚未安装'}。本次组件操作：${installationNames[state.installation]||state.installation}。`;
+ const tls=state.tls_environment;
+ if(tls){
+  $('tls-repair').hidden=!tls.windows;
+  $('tls-environment').textContent='TLS 验证引擎：'+tls.engine+' · '+tls.reason+(tls.restart_required?' · 组件操作后需重新启动工作台':'');
+ }
  const choice=state.browser_choice;
  if(choice){
   if(!$('browser-choice').options.length){options($('browser-choice'),Object.entries(choice.options));$('browser-choice').value=choice.selected||'bundled';}
@@ -64,6 +69,7 @@ function render(){
  if(current.report_id){for(const [file,label] of [['requirements_zh.csv','下载岗位要求 CSV'],['descriptions.md','下载描述模板'],...(current.outcome ? [['guided_acquisition.json','下载本批采集结果']] : [])]){const b=document.createElement('button');b.className='secondary';b.textContent=label;const id=current.report_id;b.onclick=()=>act(()=>downloadReport(id,file));$('result').append(b);}const view=document.createElement('a');view.href='/#report='+current.report_id;view.textContent=' 查看本批研究结论';const a=document.createElement('a');a.href='/advanced#report='+current.report_id;a.textContent=' 用本批要求进入个人证据中心';$('result').append(view);if(!current.outcome||current.outcome.target_jobs>0)$('result').append(a);}
  }
  for(const button of document.querySelectorAll('button'))button.disabled=state.busy && !['pause','stop'].includes(button.id);
+ if(tls) $('repair-tls').disabled=state.busy||tls.restart_required||!tls.repair_available;
  note(sticky || (state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''));
 }
 function renderCards(){const root=$('cards');root.replaceChildren();if(!current.cards.length){root.textContent='还没有岗位清单。完成搜索或人工登录后，点击“读取当前列表”。';return;}
@@ -91,7 +97,11 @@ $('upgrade-browser').addEventListener('click',()=>{
  if(confirm('将更新当前 Python 中的 Playwright 等可选组件，并重新下载匹配 Chromium；这会影响共用该 Python 的其他项目。完成后需退出并重新启动工作台，再检查浏览器。不删除岗位或证据，不关闭系统防护。是否明确同意更新？'))
   act(()=>api('/api/guided/install',{consent:true,mode:'upgrade'}));
 });
-$('network').addEventListener('click',()=>act(async()=>{const r=await api('/api/guided/diagnose',{platform:$('site').value});$('diagnostic').hidden=false;$('diagnostic').textContent=(r.message||'请分别核对系统解析和应用解析结果。')+'\n\n'+JSON.stringify(r,null,2);}));
+$('repair-tls').addEventListener('click',()=>{
+ if(confirm('仅安装 truststore 原生证书验证组件，不更新 Playwright 或浏览器。Windows 可按系统策略获取中间证书；这些证书服务请求使用系统路由，不受岗位采集代理/配额控制。不导入网站证书，不关闭校验。现有采集会话须先停止，完成后需重新启动工作台。是否继续？'))
+  act(()=>api('/api/guided/install',{consent:true,mode:'tls'}));
+});
+$('network').addEventListener('click',()=>act(async()=>{const r=await api('/api/guided/diagnose',{platform:$('site').value});if(r.tls_environment?.repair_available&&r.effective_resolution?.tls_diagnostic?.verification_reason==='issuer_unavailable')$('tls-repair').open=true;$('diagnostic').hidden=false;$('diagnostic').textContent=(r.message||'请分别核对系统解析和应用解析结果。')+'\n\n'+JSON.stringify(r,null,2);}));
 $('export').addEventListener('click',()=>act(async()=>{const r=await api('/api/guided/export',{id:active()});const url=URL.createObjectURL(new Blob([r.urls.join('\n')],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='observed-job-urls.txt';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}));
 if(!token)note('请从启动终端的完整令牌地址打开基础工作台，再进入本向导。');else refresh().catch(e=>note(e.message));
 setInterval(()=>{if(token&&!requesting)refresh().catch(()=>{});},2000);

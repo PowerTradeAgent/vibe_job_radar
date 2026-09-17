@@ -35,6 +35,7 @@ from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_r
                              failed_report, probe_browser, safe_text, package_version)
 from .browser_install import install_commands, run_command
 from .browser_choice import BrowserChoice, CHOICES, validate_choice
+from .. import tls_context
 
 MESSAGES = {
     'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
@@ -125,6 +126,7 @@ class GuidedService:
         self._thread = None
         self._last_install = 'not_started'
         self._restart_required = False
+        self._tls_restart_required = False
         self._health_probe, self._installer = health_probe, installer
         self._choice = BrowserChoice(workspace.root)
         self._choice_error = ''
@@ -197,6 +199,7 @@ class GuidedService:
                     'sites': self.registry.describe(), 'limits': asdict(self.ledger.limits),
                     'browser_package': self._package(), 'installation': self._last_install,
                     'installation_scope': 'current_process_actions_only_not_component_readiness',
+                    'tls_environment': {**tls_context.status(), 'restart_required': self._tls_restart_required},
                     'browser_choice': {'selected': self._selected_browser, 'options': CHOICES,
                                        'error': self._choice_error,
                                        'last_check': self._choice.historical_view(self._choice_data, self._package())},
@@ -286,8 +289,12 @@ class GuidedService:
         if (not isinstance(data, dict) or set(data) - {'consent', 'mode'}
                 or data.get('consent') is not True
                 or not isinstance(data.get('mode', 'ensure'), str)
-                or data.get('mode', 'ensure') not in {'ensure', 'reinstall', 'upgrade'}):
+                or data.get('mode', 'ensure') not in {'ensure', 'reinstall', 'upgrade', 'tls'}):
             raise InputError('请明确确认安装/重下载/更新模式；不接受命令、路径或版本参数。')
+        if data.get('mode') == 'tls':
+            environment = tls_context.status()
+            if not environment['windows'] or environment['explicit_ca_environment']:
+                raise InputError('此操作仅用于 Windows 默认信任策略；已有自定义CA配置须由管理员核对，不会覆盖。')
         self._submit_setup('install', mode=data.get('mode', 'ensure'))
         return {'queued': True}
 
@@ -360,6 +367,8 @@ class GuidedService:
         return report
 
     def _install_browser(self, mode='ensure'):
+        if mode == 'tls':
+            return self._install_tls_component()
         self._last_install = 'installing'
         before = package_version('playwright')
         labels = {'package_install': '正在安装/检查 Playwright Python 包。',
@@ -399,7 +408,36 @@ class GuidedService:
         self._last_install = ('restart_required' if self._restart_required else
                               'installed' if report['ready'] else 'installed_not_ready')
 
+    def _install_tls_component(self):
+        # A fixed, user-confirmed optional package. Never install a CA or browser.
+        self._last_install = 'installing'
+        stage, command = install_commands('tls')[0]
+        step = {'stage': stage, 'log': '', 'returncode': None}
+        with self._lock:
+            self._setup.update(stage=stage, message='正在安装 Windows 原生证书验证组件；不修改证书信任列表或浏览器。')
+            self._setup['steps'].append(step)
+            # Partial updates also require a clean process before further use.
+            self._tls_restart_required = self._restart_required = True
+        def progress(value):
+            with self._lock:
+                step['log'] = safe_text(value, 12000)
+        result = self._installer(command, cancel=self._shutdown, progress=progress)
+        with self._lock:
+            step.update(returncode=result.returncode, log=safe_text(result.output, 12000),
+                        timed_out=result.timed_out, cancelled=result.cancelled)
+            succeeded = not (result.returncode or result.timed_out or result.cancelled)
+            self._last_install = 'restart_required' if succeeded else 'dependency_install_failed'
+            message = ('证书验证组件安装命令已完成；请重新启动工作台，再检查当前网络策略。安装成功不代表 TLS 已通过。'
+                       if succeeded else '证书验证组件安装未完成；请保留错误并重新启动工作台。未安装证书或更换浏览器。')
+            self._setup.update(stage='restart_required', message=message)
+            self._browser_health = {**self._restart_report(), 'message': message,
+                                    'browser_channel': self._selected_browser}
+
     def diagnose(self, data):
+        if self._tls_restart_required:
+            return {'passed': False, 'code': 'tls_component_restart_required',
+                    'message': '证书验证组件操作后请先重新启动工作台；本次未发起 DNS 或网络请求。',
+                    'target_connection_tested': False, 'browser_tested': False}
         adapter = self.registry.get(data.get('platform'))
         from .network_diagnostic import diagnose_workspace
         with self._lock:

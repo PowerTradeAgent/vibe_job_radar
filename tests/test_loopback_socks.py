@@ -158,7 +158,7 @@ class RealSocksTests(unittest.TestCase):
             if endpoint!=self.proxy.server_address:raise AssertionError('unexpected direct connection')
             return self.real_dial(endpoint,*a,**kw)
         context=self.trust if trust else ssl.create_default_context()
-        with patch.dict(os.environ,{ENV:self.setting,HTTP_ENV:''}),patch('socket.getaddrinfo',side_effect=gai),patch('socket.create_connection',side_effect=dial),patch('vibe_job_radar.network.ssl.create_default_context',return_value=context):return operation()
+        with patch.dict(os.environ,{ENV:self.setting,HTTP_ENV:''}),patch('socket.getaddrinfo',side_effect=gai),patch('socket.create_connection',side_effect=dial),patch('vibe_job_radar.network.create_client_context',return_value=context):return operation()
     def request(self,**kwargs):return self.perform(lambda:SafeHTTP({HOST},interval=0).json(f'https://{HOST}/jobs'),**kwargs)
     def test_get_has_real_socks_handshake_and_target_tls(self):
         self.assertTrue(self.request()['ok']);self.assertEqual(self.connects,[(IP4,443,1)]);self.assertEqual(self.sni,[HOST]);self.assertEqual(len(self.requests),1)

@@ -167,7 +167,7 @@ class RealProxyTests(unittest.TestCase):
             return self.real_dial(endpoint,*a,**kw)
         context=self.client if trust else ssl.create_default_context()
         with patch.dict(os.environ,{ENV:setting or self.setting}),patch('socket.getaddrinfo',side_effect=resolve),\
-             patch('vibe_job_radar.network.ssl.create_default_context',return_value=context),patch('socket.create_connection',side_effect=dial):
+             patch('vibe_job_radar.network.create_client_context',return_value=context),patch('socket.create_connection',side_effect=dial):
             return call()
 
     def test_actual_connect_tls_get_reaches_target(self):
