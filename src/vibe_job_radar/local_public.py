@@ -6,6 +6,7 @@ Local research access is deliberately NOT a grant of redistribution rights.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import hmac
 import html
@@ -16,6 +17,7 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
+from .catalog_changes import compare_catalogs, validate_change
 from .collection import writer_lock
 from .guided.rate import Limits, RateLedger, RateLimit
 from .html_parser import plain_text
@@ -93,7 +95,8 @@ class LocalPublicDataClient:
         self.workspace, self.clock = workspace, clock
         self.registry = {SOURCE.key: SOURCE}
         self.root = workspace.root / 'local_public'
-        self.path = self.root / 'anthropic-board-v1.json'
+        self.path = self.root / 'anthropic-board-v2.json'
+        self.legacy_path = self.root / 'anthropic-board-v1.json'
         self.key_path = self.root / 'cursor.key'
         self.failure_guard = CacheFailureGuard(self.root, API_URL)
         self._default_transport = transport is None
@@ -132,7 +135,8 @@ class LocalPublicDataClient:
             raise ContractError('public_source_unapproved')
 
     def _validate_snapshot(self, value, now):
-        if (not isinstance(value, dict) or set(value) != {'observed_at', 'api', 'revision', 'jobs'}
+        if (not isinstance(value, dict) or set(value) not in ({'observed_at', 'api', 'revision', 'jobs'},
+                                  {'observed_at', 'api', 'revision', 'jobs', 'catalog_change'})
                 or value['api'] != API_URL or not isinstance(value['jobs'], list)
                 or len(value['jobs']) > 10000):
             raise ContractError('public_cache_invalid')
@@ -154,18 +158,22 @@ class LocalPublicDataClient:
                 seen.add(job['id'])
         if value['revision'] != revision(value['jobs']):
             raise ContractError('public_cache_invalid')
+        if 'catalog_change' in value:
+            validate_change(value['catalog_change'], value, SOURCE.key)
         return value if now - stamp <= 7*86400 else None
 
     def _cached(self, now):
         timestamp(now)
-        if self.path.is_symlink():
+        # Keep v1 untouched for rollback. A broken v2 must not fall back to v1.
+        path = self.path if self.path.exists() or self.path.is_symlink() else self.legacy_path
+        if path.is_symlink():
             raise InputError('缓存文件不能使用符号链接。')
-        if not self.path.exists():
+        if not path.exists():
             return None
-        if self.path.stat().st_size > MAX_BYTES:
+        if path.stat().st_size > MAX_BYTES:
             raise ContractError('public_cache_invalid')
         try:
-            return self._validate_snapshot(json.loads(self.path.read_text(encoding='utf-8')), now)
+            return self._validate_snapshot(json.loads(path.read_text(encoding='utf-8')), now)
         except (ValueError, TypeError, KeyError) as exc:
             raise ContractError('public_cache_invalid') from exc
 
@@ -196,7 +204,8 @@ class LocalPublicDataClient:
         return {'response': batch, 'cache_reused': cached, 'stale': now-snapshot['observed_at'] >= 600,
                 'observed_at': snapshot['observed_at'], 'network_requests': requests, 'refresh_error': error,
                 'execution_mode': self.execution_mode, 'available_jobs': len(snapshot['jobs']),
-                'matching_jobs': len(jobs), 'returned_jobs': len(batch['jobs'])}
+                'matching_jobs': len(jobs), 'returned_jobs': len(batch['jobs']),
+                'catalog_change': copy.deepcopy(snapshot.get('catalog_change'))}
 
     def cached(self, query):
         self._scope(query)
@@ -262,8 +271,9 @@ class LocalPublicDataClient:
             try:
                 jobs = parse_board(payload, now)
                 value = {'observed_at': now, 'api': API_URL, 'revision': revision(jobs), 'jobs': jobs}
+                value['catalog_change'] = compare_catalogs(cached, value, SOURCE.key)
                 self._validate_snapshot(value, now)
-                if len(json.dumps(value, ensure_ascii=False).encode('utf-8')) > MAX_BYTES:
+                if len((json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)+'\n').encode('utf-8')) > MAX_BYTES:
                     raise ContractError('public_cache_invalid')
             except ContractError as exc:
                 self.failure_guard.record(exc.code, now)

@@ -160,6 +160,9 @@ async function publicState() {
   const result = await request('/api/public/state');
   const task = result.task;
   $('public-status').textContent = task.message || '';
+  const changeMessage = task.catalog_change?.message || '';
+  $('public-changes').textContent = changeMessage;
+  $('public-changes').hidden = !changeMessage;
   const local = result.execution_mode === 'local_direct';
   $('public-service-status').textContent = local
     ? '默认在本机直接获取公开招聘，查询词和地区在本机筛选；无需产品服务器、服务地址或 Key。'

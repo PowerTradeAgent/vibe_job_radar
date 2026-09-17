@@ -14,6 +14,7 @@ import threading
 import uuid
 from pathlib import Path
 
+from .catalog_changes import compact_change
 from .collection import writer_lock
 from .network_policy import current_policy
 from .public_contract import PublicQuery, as_record
@@ -100,7 +101,7 @@ class PublicTasks:
             # Do not persist the report's full private rendering in task status.
             allowed={'success','message','code','report_id','source_url','collected_at','checked_at',
                      'cache_reused','stale','refresh_error','network_requests_this_click','scope','source_scope',
-                     'next_cursor','matching_jobs','returned_jobs','available_jobs','execution_mode'}
+                     'next_cursor','matching_jobs','returned_jobs','available_jobs','execution_mode','catalog_change'}
             view={k:v for k,v in result.items() if k in allowed}
             self._save(**view,status='completed' if result.get('success') else 'failed')
         except Exception as exc:
@@ -122,6 +123,9 @@ class PublicTasks:
         for key in ('matching_jobs','returned_jobs','available_jobs'):
             if key in result:
                 summary[key]=result[key]
+        change = result.get('catalog_change') if self.mode() == 'local_direct' else None
+        if change is not None:
+            summary['catalog_change'] = compact_change(change)
         if not records:
             return {**summary,'code':'public_empty','message':'所选来源中未取得匹配条目，不代表整个市场没有岗位。'}
         from .pipeline import analyze
@@ -144,6 +148,10 @@ class PublicTasks:
                    'jobs':[dict(j, text_sha256=hashlib.sha256(j['text'].encode()).hexdigest())
                            for j in jobs]}
             for job in audit['jobs']:job.pop('text')
+            if change is not None:
+                atomic_json(folder/'catalog_changes.json', change)
+                manifest['output_files_sha256']['catalog_changes.json'] = hashlib.sha256(
+                    (folder/'catalog_changes.json').read_bytes()).hexdigest()
             atomic_json(folder/'public_source.json',audit)
             manifest['output_files_sha256']['public_source.json']=hashlib.sha256((folder/'public_source.json').read_bytes()).hexdigest()
             atomic_json(folder/'run_manifest.json',manifest)
