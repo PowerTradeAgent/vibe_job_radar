@@ -3,6 +3,8 @@ const $ = id => document.getElementById(id);
 const token = sessionStorage.getItem("radar-session") || "";
 let profile = null, page = 0, total = 0, runId = "", activeCollection = "", looping = false, collecting = false;
 let collectionGuide = null;
+const linkedReport = new URLSearchParams(location.hash.slice(1)).get("report");
+let linkedReportLoaded = false;
 let selected = new Map(), metrics = [], busy = false, snapshotCapabilities = {};
 const note = text => { $("notice").textContent = text; };
 async function api(path, data={}) {
@@ -54,7 +56,9 @@ async function refreshProfile(newState) {
   profile=newState||await api("/api/evidence/state");
   $("revision").textContent=`个人证据版本 ${profile.revision} · 已保存证据 ${profile.evidence.length} · 已复核条目 ${Object.keys(profile.reviews).length}`;
   const old=$("source-run").value;
-  options($("source-run"),Object.fromEntries(profile.runs.map(r=>[r.id,`${r.created_at} · ${r.stats.requirement_rows} 条 · ${r.id.slice(0,8)}`])),old);
+  const runOptions=Object.fromEntries(profile.runs.map(r=>[r.id,`${r.created_at} · ${r.stats.requirement_rows} 条 · ${r.id.slice(0,8)}`]));
+  if(old===linkedReport && linkedReportLoaded && runId===old && !runOptions[old]) runOptions[old]=`指定历史报告 · ${old.slice(0,8)}`;
+  options($("source-run"),runOptions,old);
   options($("artifact-select"),{"":"无附件 / 使用外部引用",...Object.fromEntries(profile.artifacts.map(a=>[a.id,`${a.name} · ${a.size} 字节 · ${a.id.slice(0,12)}`]))},$("artifact-select").value);
   if(!$("capabilities").childElementCount)checks("capabilities",profile.capabilities);
   if(!$("metric-id").options.length)options($("metric-id"),Object.fromEntries(profile.metrics.map(m=>[m.metric_id,`${m.label} (${m.unit})`])));
@@ -179,5 +183,29 @@ $("collect-resume").onclick=async()=>{
 $("collect-load").onclick=()=>act(async()=>showCollection(await api("/api/collection/status",{id:$("collect-history").value})));
 $("collect-refresh").onclick=()=>act(refreshCollections);
 $("platform-form").onsubmit=event=>{event.preventDefault();act(async()=>{const result=await api("/api/collection/register",Object.fromEntries(new FormData(event.target)));await init();note(result.message);});};
-async function init(){if(!token)throw new Error("请先从启动器地址打开基础工作台，再进入本页面。");const response=await fetch("/api/status",{headers:{"X-Radar-Token":token},cache:"no-store"});const s=await response.json();if(!response.ok)throw new Error(s.error);const platforms=Object.fromEntries(Object.entries(s.platforms).map(([k,v])=>[k,`${v.label} (${v.domains.join(",")})`]));checks("collect-platforms",platforms,Object.keys(platforms));checks("collect-roles",s.roles,Object.keys(s.roles));checks("collect-permits",platforms,[]);if(!collectionGuide)collectionGuide=new window.CollectionGuide({api,note,act,chosen,setChecks,platforms:s.platforms,keyConfigured:s.brave_key_configured});await refreshProfile();await refreshCollections();mappingCount();updateButtons();}
+async function init(){if(!token)throw new Error("请先从启动器地址打开基础工作台，再进入本页面。");const response=await fetch("/api/status",{headers:{"X-Radar-Token":token},cache:"no-store"});const s=await response.json();if(!response.ok)throw new Error(s.error);const platforms=Object.fromEntries(Object.entries(s.platforms).map(([k,v])=>[k,`${v.label} (${v.domains.join(",")})`]));checks("collect-platforms",platforms,Object.keys(platforms));checks("collect-roles",s.roles,Object.keys(s.roles));checks("collect-permits",platforms,[]);if(!collectionGuide)collectionGuide=new window.CollectionGuide({api,note,act,chosen,setChecks,platforms:s.platforms,keyConfigured:s.brave_key_configured});await refreshProfile();await refreshCollections();mappingCount();updateButtons();await openLinkedReport();}
+async function openLinkedReport() {
+  if (linkedReport === null || linkedReportLoaded) return;
+  linkedReportLoaded = true;
+  if (!/^[a-f0-9]{32}$/.test(linkedReport)) {
+    $('source-run').value = ''; throw new Error('报告链接无效，未自动加载其他报告。');
+  }
+  const response = await fetch('/api/report/' + linkedReport, {headers:{'X-Radar-Token':token},cache:'no-store'});
+  const report = await response.json();
+  if (!response.ok || report.manifest?.mode !== 'real_sample') {
+    $('source-run').value = ''; throw new Error('原报告不存在或属于合成演示，未改用其他真实报告。');
+  }
+  if (![...$('source-run').options].some(o=>o.value===linkedReport)) {
+    const option = document.createElement('option'); option.value = linkedReport;
+    option.textContent = `指定历史报告 · ${linkedReport.slice(0,8)}`; $('source-run').append(option);
+  }
+  $('source-run').value = linkedReport;
+  try { await loadRequirements(true); }
+  catch (error) { $('source-run').value=''; runId=''; throw error; }
+  let back = $('research-return');
+  if (!back) { back=document.createElement('a'); back.id='research-return'; back.textContent='返回这份岗位研究结论'; $('source-run').closest('section').prepend(back); }
+  back.href='/#report='+linkedReport;
+  $('source-run').closest('section').scrollIntoView({block:'start'});
+  note('已加载来自研究结果的同一份报告。请先复核原文，再用本人实际项目举证；没有自动批准或修改个人资料。');
+}
 init().catch(error=>note(error.message));

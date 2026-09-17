@@ -138,13 +138,13 @@ def descriptions(summary: list[dict], requirements: list[Requirement], matrix: l
     text = header + "## 表述框架\n\n场景与范围 → 自己承担的动作 → 工程控制机制 → 同口径指标 → 可追溯证据。\n\n"
     text += "原文要求、岗位硬条件与限制条款保留在 CSV 中；以下措辞不能代替真实经历，也不保证完全胜任。\n\n"
     global_rows = [r for r in summary if r["scope"] == "all"]
-    common = [r for r in global_rows if r["bucket"] in {"intersection", "common"}]
+    common = [r for r in global_rows if r["denominator_jobs"] >= 2 and r["bucket"] in {"intersection", "common"}]
     text += "## 通用底座：待填模板\n\n"
     if common:
         wording = "；".join(config["capabilities"][r["capability"]]["description"] for r in common)
         text += f"在【项目/业务场景及本人职责】中，{wording}。在【同口径观察窗口】下，以【基线→当前值、样本量、质量约束】记录结果，并提供【提交/测试/发布/监控证据】。\n\n"
     else:
-        text += "尚无足够的已接收正文证据，未生成通用能力主张。先补正文或处理 review_queue。\n\n"
+        text += "尚无足够的跨岗位正文证据，未生成通用能力主张。单岗位要求仍见下方逐项与分岗位模板；先补样本或处理 review_queue。\n\n"
     text += "## 样本要求并集：逐项措辞\n\n"
     for row in global_rows:
         cap = config["capabilities"][row["capability"]]
