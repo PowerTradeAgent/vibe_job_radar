@@ -22,6 +22,7 @@ from ..utils import domain_matches
 from ..network_policy import NetworkPolicy, current_policy, use_policy
 from .contracts import CrawlError
 from .rate import RateLedger, RateLimit
+from .request_headers import browser_headers
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,9 @@ class PinnedTransport:
             raise CrawlError('site_stopped')
         if body and len(body) > 1_000_000:
             raise CrawlError('request_too_large')
+        # Validate before DNS, quota reservation or dialing; a bad field must
+        # not send a partial HTTP request and then be retried.
+        hdr = browser_headers(headers)
         if self.network_policy is None:
             self.network_policy = current_policy()
         try:
@@ -125,11 +129,6 @@ class PinnedTransport:
                 conn = PinnedHTTPSConnection(host, ip, 20)
         except FetchError as exc:
             raise CrawlError(exc.code) from exc
-        hdr = {k: v for k, v in (headers or {}).items()
-               if k.lower() not in {'host', 'connection', 'content-length', 'accept-encoding',
-                                    'proxy-authorization', 'proxy-connection', 'transfer-encoding'}}
-        hdr['Accept-Encoding'] = 'identity'
-        hdr.setdefault('User-Agent', USER_AGENT)
         try:
             conn.request(method, target, body=body, headers=hdr)
             response = conn.getresponse()

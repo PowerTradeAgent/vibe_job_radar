@@ -26,6 +26,7 @@ from vibe_job_radar.guided.browser import PlaywrightBackend
 from vibe_job_radar.guided.rate import RateLedger, Limits
 from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.network_policy import current_policy
+from vibe_job_radar.network import USER_AGENT
 from vibe_job_radar.network_settings import save as save_settings
 from vibe_job_radar.workspace import Workspace
 
@@ -36,19 +37,31 @@ def main():
     args = parser.parse_args()
     out = ROOT/'browser-acceptance'/'policy-binding'; out.mkdir(parents=True, exist_ok=True)
     result = {'success':False, 'checks':[], 'callback_contexts':[], 'page_errors':[],
+              'header_checks': [], 'stylesheet_rendered': False,
               'scope':'Real collector and callback dispatch, production TLS bridge and report; local artificial DoH/pages only. Not user-network or site certification.'}
     fixture = EncryptedRoundTripTests(); fixture.setUp()
     original_get = fixture.origin.RequestHandlerClass.do_GET
     observed = result['callback_contexts']
 
     def get(handler):
+        # Inspect serialized HTTP fields, not only the Python input dictionary.
+        agents = handler.headers.get_all('User-Agent', [])
+        encodings = handler.headers.get_all('Accept-Encoding', [])
+        result['header_checks'].append({
+            'path': urlsplit(handler.path).path, 'agent_count': len(agents),
+            'crawler_identified': len(agents) == 1 and USER_AGENT in agents[0].split(),
+            'identity_once': encodings == ['identity'],
+        })
         fixture.targets.append((handler.path, dict(handler.headers)))
         path = urlsplit(handler.path).path
         if path == '/robots.txt':
             content = 'User-agent: *\nAllow: /\n'; mime = 'text/plain'
         elif path == '/search':
-            content = '<!doctype html><meta charset="utf-8"><h1>人工测试岗位列表</h1><div id="jobs"></div><script src="/fixture.js"></script>'
+            content = '<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="/fixture.css"><h1>人工测试岗位列表</h1><div id="jobs"></div><script src="/fixture.js"></script>'
             mime = 'text/html; charset=utf-8'
+        elif path == '/fixture.css':
+            content = '#jobs { --radar-fixture-loaded: yes; padding-left: 17px; }'
+            mime = 'text/css'
         elif path == '/fixture.js':
             content = "fetch('/fixture-list.json').then(r=>r.json()).then(j=>{let a=document.createElement('a');a.href=j.url;a.textContent=j.title;document.querySelector('#jobs').append(a);})"
             mime = 'application/javascript'
@@ -69,6 +82,14 @@ def main():
         def __init__(self,*a,**kw):
             super().__init__(*a,**kw)
             self.page.on('pageerror', lambda exc: result['page_errors'].append(type(exc).__name__))
+        def snapshot(self):
+            snapshot = super().snapshot()
+            if urlsplit(snapshot.url).path == '/search':
+                value = self.page.locator('#jobs').evaluate(
+                    "el => getComputedStyle(el).getPropertyValue('--radar-fixture-loaded').trim()")
+                assert value == 'yes', 'stylesheet did not render through the production bridge'
+                result['stylesheet_rendered'] = True
+            return snapshot
         def _route(self,route):
             # Observation only: do NOT set/reset context or patch the dispatcher.
             bound = self.wire.network_policy
@@ -116,12 +137,12 @@ def main():
                 service.create(query); task = wait(service)
                 assert task['status']=='ready', {'code':task['code'],'message':task['message']}
                 assert len(task['cards'])==1
-                assert {r['kind'] for r in observed} >= {'document','script','fetch'}
+                assert {r['kind'] for r in observed} >= {'document','stylesheet','script','fetch'}
                 assert any(r['ambient_encrypted_dns'] is False for r in observed)
                 assert all(r['bound_encrypted_dns'] is True and r['policy_id']==expected for r in observed)
                 assert len(fixture.posts)==2  # Same workspace resolver cache, not a second resolver.
                 paths = {urlsplit(p).path for p,_ in fixture.targets}
-                assert {'/robots.txt','/search','/fixture.js','/fixture-list.json'} <= paths
+                assert {'/robots.txt','/search','/fixture.css','/fixture.js','/fixture-list.json'} <= paths
                 result['checks'].append('actual Playwright route callbacks lose ambient consent but retain the owner-bound policy and shared resolver for robots, page, script and fetch')
                 service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]})
                 task = wait(service)
@@ -146,6 +167,11 @@ def main():
                 assert before==(len(fixture.posts),len(fixture.targets))
                 result['checks'].append('separate non-consenting workspace never borrows consent, cache or network settings from the successful workspace')
                 assert set(fixture.sni)=={'cloudflare-dns.com',HOST}
+                assert result['stylesheet_rendered']
+                assert result['header_checks']
+                assert all(r['agent_count'] == 1 and r['crawler_identified'] and r['identity_once']
+                           for r in result['header_checks']), result['header_checks']
+                result['checks'].append('robots, CSS, document, script, data and detail each arrive with one explicit crawler User-Agent and one identity encoding; stylesheet actually renders')
                 assert not result['page_errors']
                 result['tls_requests']={'doh_posts':len(fixture.posts),'target_requests':len(fixture.targets)}
                 result['success']=True

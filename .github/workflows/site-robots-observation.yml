@@ -1,0 +1,26 @@
+name: site-robots-observation
+on:
+  pull_request:
+    paths:
+      - 'scripts/observe_site_robots.py'
+      - '.github/workflows/site-robots-observation.yml'
+permissions:
+  contents: read
+jobs:
+  fixed-robots-observation:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install "truststore>=0.10.4,<0.11"
+      - name: Observe fixed robots and permitted search HTML without following links
+        run: python scripts/observe_site_robots.py --live
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fixed-robots-observation
+          retention-days: 7
+          path: site-observations/
