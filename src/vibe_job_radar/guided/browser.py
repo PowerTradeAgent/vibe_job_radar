@@ -20,7 +20,9 @@ from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_r
 
 class PlaywrightBackend:
     def __init__(self, adapter, ledger, cancelled, progress=lambda *_: None, *,
-                 headless=False, executable_path=None, transport_factory=PinnedTransport):
+                 headless=False, executable_path=None, transport_factory=PinnedTransport, channel=None):
+        if channel not in (None, 'msedge') or (channel and executable_path):
+            raise ValueError('unsupported browser choice')
         self.adapter, self.cancelled = adapter, cancelled
         self.wire = transport_factory(adapter, ledger, cancelled, progress)
         self.browser = self.context = self.page = self.runtime = None
@@ -31,6 +33,7 @@ class PlaywrightBackend:
         self.resource_denials = set()
         self._pagination_page = None
         self.startup_report = environment_report()
+        self.startup_report['browser_channel'] = channel or 'bundled'
         self.startup_report['mode'] = 'headless' if headless else 'headed'
         try:
             # Reject incompatible metadata before importing any Playwright code.
@@ -54,27 +57,38 @@ class PlaywrightBackend:
             from playwright.sync_api import sync_playwright
             self.startup_report['stage'] = 'driver'
             self.runtime = sync_playwright().start()
-            expected = str(executable_path or self.runtime.chromium.executable_path)
-            self.startup_report.update(stage='executable', executable_path=safe_text(expected),
-                                       executable_exists=None)
-            try:
-                self.startup_report['executable_exists'] = stat.S_ISREG(Path(expected).stat().st_mode)
-            except (FileNotFoundError, NotADirectoryError):
-                self.startup_report['executable_exists'] = False
-            # PermissionError and other stat errors must retain their real cause;
-            # a path that cannot be inspected is not a proved missing executable.
-            # Headed collection needs the regular Chromium build, not only the
-            # separately installed headless shell. Test backends can select a path.
-            if (not headless or executable_path) and not self.startup_report['executable_exists']:
-                raise BrowserStartupError(failed_report(self.startup_report, FileNotFoundError(expected), code='browser_executable_missing'))
+            if channel:
+                # Let the SDK resolve its documented stable Edge channel. The
+                # bundled Chromium path says nothing about installed Edge. Never
+                # attach to a daily profile or install/overwrite a system browser.
+                self.startup_report.update(stage='executable', executable_path='',
+                                           executable_exists=None)
+            else:
+                expected = str(executable_path or self.runtime.chromium.executable_path)
+                self.startup_report.update(stage='executable', executable_path=safe_text(expected),
+                                           executable_exists=None)
+                try:
+                    self.startup_report['executable_exists'] = stat.S_ISREG(Path(expected).stat().st_mode)
+                except (FileNotFoundError, NotADirectoryError):
+                    self.startup_report['executable_exists'] = False
+                # PermissionError and other stat errors must retain their real cause;
+                # a path that cannot be inspected is not a proved missing executable.
+                # Headed collection needs the regular Chromium build, not only the
+                # separately installed headless shell. Test backends can select a path.
+                if (not headless or executable_path) and not self.startup_report['executable_exists']:
+                    raise BrowserStartupError(failed_report(self.startup_report, FileNotFoundError(expected), code='browser_executable_missing'))
             args = ['--disable-background-networking', '--disable-quic', '--disable-sync',
                     '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']
             options = {'headless': headless, 'args': args, 'timeout': 30000}
             if executable_path:
                 options['executable_path'] = executable_path
+            if channel:
+                options['channel'] = channel
             self.startup_report.update(stage='launch', launch_tested=True)
             self.browser = self.runtime.chromium.launch(**options)
-            self.startup_report['stage'] = 'context'
+            self.startup_report.update(stage='context', executable_exists=True)
+            if channel:
+                self.startup_report['browser_version'] = self.browser.version
             self.context = self.browser.new_context(service_workers='block', accept_downloads=False)
             self.context.route('**/*', self._route)
             self.context.route_web_socket('**/*', lambda ws: ws.close())
