@@ -179,7 +179,7 @@ def main():
                 # credentials or extra upstream endpoint are introduced.
                 form=page.locator('#search-form')
                 form.locator('[name=max_pages]').select_option('1')
-                form.locator('details').filter(has=form.locator('[name=list_url]')).locator('summary').click()
+                form.locator('details:has(input[name=list_url]) > summary').click()
                 form.locator('[name=list_url]').fill('https://jobs.fixture.test/search')
                 form.locator('[name=rights_note]').fill('独立自动接续验收；仅人工站点，不是市场数据。')
                 form.locator('[name=consent]').check()

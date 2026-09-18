@@ -258,6 +258,12 @@ def main():
                     b=backend('redirect');b.open(URL+'/redirect');assert b.page.url==URL+'/search'
                     assert b.native_counts['document']==2
                     assert b.page.locator('#jobs').evaluate("el=>getComputedStyle(el).getPropertyValue('--native-fixture').trim()")=='yes'
+                    # Headed CI may leave the new tab behind the retired
+                    # scratch window. Activate and await an actual paint before
+                    # capture; keep screenshot errors fatal, without retries.
+                    b.page.bring_to_front()
+                    b.page.wait_for_function("document.visibilityState === 'visible'")
+                    b.page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
                     b.page.screenshot(path=str(out/'native-rendered.png'))
                     result['checks'].append('same-origin 302 remains browser-native; both document hops counted; gzip stylesheet computed style verified')
                     b.close();backends.remove(b)
