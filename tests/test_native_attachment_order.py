@@ -11,6 +11,7 @@ class NativeAttachmentOrderTests(TestCase):
         b._closing = False
         b._sessions = {}
         b._adopting = set()
+        b._page_creation = 1
         b._fatal = Mock()
         events = []
         info = {'type': 'page', 'targetId': 'owned-page'}

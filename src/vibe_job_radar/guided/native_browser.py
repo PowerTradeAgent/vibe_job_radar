@@ -20,6 +20,7 @@ from .contracts import CrawlError
 from .diagnostic_trace import notify, observe, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
+from .native_errors import native_failure_code
 from .rate import RateLimit
 from .transport import PinnedTransport
 from ..network import USER_AGENT
@@ -72,6 +73,8 @@ class NativeBackend(PlaywrightBackend):
         self._robots_url = ''
         self._auth_attempts = set()
         self._adopting = set()
+        self._page_sessions, self._bound_pages = {}, {}
+        self._page_creation = 0
         self.native_counts = {'document':0, 'business':0, 'asset':0, 'robots':0, 'login':0,
                               'blocked':0, 'responses':0}
         super().__init__(adapter, ledger, cancelled, progress, headless=headless,
@@ -81,7 +84,7 @@ class NativeBackend(PlaywrightBackend):
     def _launch_options(self, options):
         self.tunnel = NativeTunnel(self.contract.hosts, self.wire.network_policy, self.cancelled)
         return {**options, 'proxy': {'server': self.tunnel.endpoint},
-                'args': [*options['args'], '--proxy-bypass-list=<-loopback>']}
+                'args': [*options['args'], '--proxy-bypass-list=<-loopback>', '--block-new-web-contents']}
 
     def _configure_context(self):
         self.context.route_web_socket('**/*', lambda ws: ws.close())
@@ -99,6 +102,55 @@ class NativeBackend(PlaywrightBackend):
         self._cdp.send('Target.setAutoAttach', {'autoAttach':True,
             'waitForDebuggerOnStart':True, 'flatten':True})
 
+    def _new_page(self):
+        # Only application-requested blank tabs can become controlled surfaces.
+        # No polling or access-rule fallback: configuration completes as part of
+        # creating the page, before the caller can navigate it.
+        self._page_creation += 1
+        try:
+            page = self.context.new_page()
+            self._bind_page(page)
+            if self.error:
+                raise CrawlError(self.error)
+            return page
+        finally:
+            self._page_creation -= 1
+
+    def _bind_page(self, page):
+        if page in self._bound_pages:
+            return
+        if self._closing or not self._page_creation or page.url not in ('', 'about:blank'):
+            page.close()
+            if not self._closing:
+                self._fatal('native_surface_unsupported')
+            return
+        client = self.context.new_cdp_session(page)
+        info = client.send('Target.getTargetInfo')['targetInfo']
+        target = info['targetId']
+        if info.get('openerId') or target not in self._sessions.values():
+            client.detach()
+            page.close()
+            self._fatal('native_surface_unsupported')
+            return
+        # Retire the temporary target-creation attachment BEFORE configuring
+        # Fetch on the public Playwright page session. Edge does not deliver
+        # interception events through the old non-flattened relay reliably.
+        for old, known in tuple(self._sessions.items()):
+            if known == target:
+                self._cdp.send('Target.detachFromTarget', {'sessionId':old})
+                self._detached({'sessionId':old})
+        session = 'page:' + target
+        self._page_sessions[session] = client
+        self._bound_pages[page] = session
+        for method in ('Fetch.requestPaused', 'Fetch.authRequired',
+                       'Network.dataReceived', 'Network.loadingFinished',
+                       'Network.loadingFailed', 'Target.attachedToTarget'):
+            client.on(method, lambda data, name=method: self._received({
+                'sessionId':session, 'message':json.dumps({'method':name, 'params':data})}))
+        page.on('close', lambda *_: self._detached({'sessionId':session}))
+        self._install_target(session, info)
+        super()._bind_page(page)
+
     def _send(self, session, method, params=None, callback=None):
         if self._closing:
             return
@@ -108,6 +160,13 @@ class NativeBackend(PlaywrightBackend):
             raise CrawlError('native_observation_limit')
         self._pending[ident] = (session, callback)
         try:
+            client = self._page_sessions.get(session)
+            if client is not None:
+                result = client.send(method, params or {})
+                self._pending.pop(ident, None)
+                if callback:
+                    callback(result)
+                return
             self._cdp.send('Target.sendMessageToTarget', {'sessionId':session,
                 'message':json.dumps({'id':ident, 'method':method, 'params':params or {}})})
         except Exception:
@@ -118,7 +177,9 @@ class NativeBackend(PlaywrightBackend):
         if self._closing:
             return
         info, session = event['targetInfo'], event['sessionId']
-        if info['type'] != 'page' or len(self._sessions) >= 8:
+        if (info['type'] != 'page' or len(self._sessions) >= 8
+                or info.get('openerId') or not self._page_creation
+                or info.get('url', '') not in ('', 'about:blank')):
             self._cdp.send('Target.closeTarget', {'targetId':info['targetId']})
             return
         target = info['targetId']
@@ -146,6 +207,12 @@ class NativeBackend(PlaywrightBackend):
     def _install_target(self, session, info):
         self._sessions[session] = info['targetId']
         try:
+            if session not in self._page_sessions:
+                # The only permitted target here is an app-created blank tab.
+                # Release creation so Playwright can expose its public Page;
+                # no document is navigated before _bind_page configures Fetch.
+                self._send(session, 'Runtime.runIfWaitingForDebugger')
+                return
             self._send(session, 'Network.enable', {'maxTotalBufferSize':5_000_000,'maxResourceBufferSize':1_000_000})
             self._send(session, 'Network.setUserAgentOverride', {'userAgent':self._native_user_agent})
             self._send(session, 'Network.setCacheDisabled', {'cacheDisabled':True})
@@ -153,7 +220,7 @@ class NativeBackend(PlaywrightBackend):
                 {'urlPattern':'*','requestStage':'Request'},
                 {'urlPattern':'*','requestStage':'Response'}], 'handleAuthRequests':True})
             self._send(session, 'Target.setAutoAttach', {'autoAttach':True,
-                'waitForDebuggerOnStart':True,'flatten':False})
+                'waitForDebuggerOnStart':True,'flatten':True})
             self._send(session, 'Runtime.runIfWaitingForDebugger')
         except Exception:
             self._fatal('native_protocol_error')
@@ -162,6 +229,10 @@ class NativeBackend(PlaywrightBackend):
     def _detached(self, event):
         session = event['sessionId']
         self._sessions.pop(session, None)
+        self._page_sessions.pop(session, None)
+        for page, bound in tuple(self._bound_pages.items()):
+            if bound == session:
+                self._bound_pages.pop(page, None)
         for key in [k for k,v in self._pending.items() if v[0] == session]:
             self._pending.pop(key, None)
         for key in [k for k in self._requests if k[0] == session]:
@@ -204,9 +275,7 @@ class NativeBackend(PlaywrightBackend):
                 self._hops.pop(key,None)
                 if record and record['role'] != 'asset' and not self.cancelled.is_set() and not self.error:
                     err = data.get('errorText','')
-                    code = ('tls_verification_failed' if 'CERT_' in err else
-                            'tls_handshake_failed' if 'SSL_' in err else
-                            self.tunnel.last_error or 'network_error')
+                    code = native_failure_code(err) or self.tunnel.last_error or 'network_error'
                     self._fatal(code)
         except Exception:
             self._fatal('native_protocol_error')
@@ -305,12 +374,16 @@ class NativeBackend(PlaywrightBackend):
 
     def _response_paused(self, session, event):
         url=event['request']['url']; status=event.get('responseStatusCode',0)
-        if 'responseErrorReason' in event:
-            raise CrawlError('network_error')
         notify(getattr(self,'_diagnostics',None),'mark',status=status)
         key=(session,event.get('networkId',event['requestId'])); record=self._requests.get(key)
         if not record:
             raise CrawlError('native_unaccounted_response')
+        if 'responseErrorReason' in event:
+            # The already-authorized native request has failed. Preserve its
+            # original browser failure instead of replacing it with our own
+            # BlockedByClient. This resumes error delivery, not a new request.
+            self._send(session,'Fetch.continueRequest',{'requestId':event['requestId']})
+            return
         headers={h['name'].lower():h['value'] for h in event.get('responseHeaders',[])}
         if status in {401,403,429} and (record['role']!='asset' or status==429):
             delay=self.wire._retry_seconds(headers.get('retry-after',''))
@@ -388,7 +461,7 @@ class NativeBackend(PlaywrightBackend):
             self._loading_robots=True; self._robots_url=origin+'/robots.txt'
             scratch=None
             try:
-                scratch=self.context.new_page()
+                scratch=self._new_page()
                 response=scratch.goto(self._robots_url,wait_until='load',timeout=45000)
                 self._check_error()
                 if response is None:
@@ -398,9 +471,7 @@ class NativeBackend(PlaywrightBackend):
             except CrawlError:
                 raise
             except Exception as exc:
-                code = self.error or self.tunnel.last_error
-                if not code and 'ERR_BLOCKED_BY_ADMINISTRATOR' in str(exc):
-                    code = 'native_administrator_blocked'
+                code = self.error or self.tunnel.last_error or native_failure_code(exc)
                 raise CrawlError(code or 'robots_unavailable') from exc
             finally:
                 if scratch:
@@ -422,7 +493,7 @@ class NativeBackend(PlaywrightBackend):
         except CrawlError:
             raise
         except Exception as exc:
-            raise self.wait_error or CrawlError(self.error or self.tunnel.last_error or 'page_not_ready') from exc
+            raise self.wait_error or CrawlError(self.error or self.tunnel.last_error or native_failure_code(exc) or 'page_not_ready') from exc
 
     def _settle(self):
         deadline=time.monotonic()+15
@@ -474,3 +545,4 @@ class NativeBackend(PlaywrightBackend):
             self.tunnel.close(); self.tunnel=None
         self._sessions.clear(); self._pending.clear(); self._requests.clear(); self._hops.clear()
         self._observations.clear(); self._auth_attempts.clear()
+        self._page_sessions.clear(); self._bound_pages.clear()

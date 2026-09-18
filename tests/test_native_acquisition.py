@@ -29,7 +29,7 @@ SECRET='NOT-IN-DIAGNOSTICS-fixture-only'
 
 def contract():
     return NativeContract('fixture_v1',(HOST,),(
-        NativeRule('pages',HOST,r'/(?:search|next|job/[0-9]+|login|redirect|denied|limited|large|badcert|cross|unknown)',resources=('Document',),role='document'),
+        NativeRule('pages',HOST,r'/(?:search|next|job/[0-9]+|login|redirect|denied|limited|large|badcert|cross|unknown|origin-auth)',resources=('Document',),role='document'),
         NativeRule('assets',HOST,r'/fixture\.(?:js|css)',resources=('Script','Stylesheet'),role='asset'),
         NativeRule('query_jobs',HOST,r'/api/jobs',methods=('POST',)),
         NativeRule('login_form',HOST,r'/login',methods=('POST',),resources=('Document','Fetch','XHR'),role='login',authentication=True),
@@ -160,6 +160,7 @@ class NativeControllerTests(unittest.TestCase):
         b=NativeBackend.__new__(NativeBackend);self.b=b
         b.adapter=adapter();b.contract=contract();b.cancelled=threading.Event()
         b.error=b.wait_error=None;b._halted=b._closing=b._loading_robots=False
+        b._page_sessions={};b._bound_pages={};b._page_creation=0
         b._robots_url='';b._sessions={'session':'frame'};b._pending={};b._requests={};b._hops={}
         b._auth_attempts=set();b._epoch=1;b._observations=deque(maxlen=20);b._observed_bytes=0
         b._pagination_page=None;b.auth_mode=False;b._send=Mock();b._cdp=Mock()
@@ -175,6 +176,7 @@ class NativeControllerTests(unittest.TestCase):
         event=self.req(**kw);event.update(responseStatusCode=status,responseHeaders=[{'name':k,'value':v} for k,v in (headers or {}).items()]);return event
     def test_owned_target_installs_actual_identified_agent_before_running(self):
         self.b._native_user_agent='ActualBrowser/1.0 VibeJobRadar/0.1'
+        self.b._page_sessions['new-session']=Mock()
         self.b._install_target('new-session', {'targetId':'new-target'})
         calls=self.b._send.call_args_list
         override=[c for c in calls if c.args[1]=='Network.setUserAgentOverride']

@@ -113,6 +113,7 @@ class Fixture:
                 owner.requests.append({'method':self.command,'path':self.path.split('?')[0],
                     'cookie_ok':'fixture_session=valid' in self.headers.get('Cookie',''),
                     'proxy_secret_absent':not self.headers.get('Proxy-Authorization'),
+                    'origin_secret_absent':not self.headers.get('Authorization'),
                     'agent_identified':'VibeJobRadar/0.1' in self.headers.get('User-Agent',''),
                     'body_intact':body==json.dumps({'q':SECRET},separators=(',',':')).encode() if body else True})
             def do_GET(self):
@@ -128,6 +129,7 @@ class Fixture:
                 elif path=='/job/1':self.send('<h1>时间序列算法工程师</h1><div class="job-description">要求熟练使用 Cursor 进行 AI 辅助编程，编写单元测试与代码审查，负责时间序列预测系统。仅为本地人工测试，不是真实招聘信息。</div>')
                 elif path=='/redirect':self.send('',status=302,extra=[('Location','/search')])
                 elif path=='/cross':self.send('',status=302,extra=[('Location','https://outside.fixture.test/forbidden')])
+                elif path=='/origin-auth':self.send('origin auth',status=401,extra=[('WWW-Authenticate','Basic realm="Radar local native session"')])
                 elif path=='/denied':self.send('denied',status=403)
                 elif path=='/limited':self.send('wait',status=429,extra=[('Retry-After','301')])
                 elif path=='/unknown':self.send("<h1>人工</h1><script>fetch('/apply',{method:'POST',body:'forbidden'})</script>")
@@ -156,7 +158,7 @@ class Fixture:
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--controlled',action='store_true');parser.add_argument('--channel',choices=['msedge']);parser.add_argument('--executable')
+    parser=argparse.ArgumentParser();parser.add_argument('--controlled',action='store_true');parser.add_argument('--channel',choices=['msedge']);parser.add_argument('--executable');parser.add_argument('--headed',action='store_true')
     args=parser.parse_args()
     if not args.controlled:
         print('No requests. Use --controlled for explicit developer-only local fixture acceptance.');return
@@ -193,7 +195,7 @@ def main():
                     if address==('93.184.216.34',443):return real_dial(destination[0],*a,**kw)
                     if address[0] in ('127.0.0.1','localhost','::1'):return real_dial(address,*a,**kw)
                     raise AssertionError('test attempted external network')
-                options={'headless':True}
+                options={'headless':not args.headed}
                 if args.channel:options['channel']=args.channel
                 if args.executable:options['executable_path']=args.executable
                 class TestedBackend(NativeBackend):
@@ -264,8 +266,14 @@ def main():
                     assert not b.error,b.error
                     assert any(r['path']=='/login' and r['method']=='POST' for r in good.requests)
                     result['checks'].append('reviewed native login POST executes only in explicit authentication mode')
+                    checkpoint('negative-popup')
+                    b.page.evaluate("() => {window.open('/apply'); window.open('/apply', '_blank', 'noopener');}")
+                    b.page.wait_for_timeout(150)
+                    assert len(b.context.pages)==1, 'uncontrolled popup escaped the owned-page boundary'
+                    assert not any(r['path']=='/apply' for r in good.requests)
+                    result['checks'].append('script popups, including noopener, do not create uncontrolled requests')
                     b.close();backends.remove(b)
-                    for name,path,expected in [('cross','/cross','redirect_requires_attention'),('unknown','/unknown','native_operation_unreviewed'),('denied','/denied','http_403'),('limited','/limited','http_429')]:
+                    for name,path,expected in [('cross','/cross','redirect_requires_attention'),('unknown','/unknown','native_operation_unreviewed'),('origin-auth','/origin-auth','http_401'),('denied','/denied','http_403'),('limited','/limited','http_429')]:
                         checkpoint('negative-'+name)
                         b=backend(name)
                         try:b.open(URL+path)
@@ -274,18 +282,30 @@ def main():
                         else:raise AssertionError(name+' was not stopped')
                         b.close();backends.remove(b);result['checks'].append(name+' stops with '+expected)
                     assert not any(r['path']=='/apply' for r in good.requests)
+                    checkpoint('negative-proxy-auth')
+                    before=len(good.requests)
+                    b=backend('bad-proxy-auth')
+                    b.tunnel.password += '-wrong-fixture-only'
+                    try:b.open(URL+'/search')
+                    except Exception as exc:
+                        assert getattr(exc,'code',None)=='native_proxy_auth_failed', getattr(exc,'code',None)
+                    else:raise AssertionError('wrong local proxy credentials accepted')
+                    assert len(good.requests)==before, 'wrong proxy secret reached the TLS source'
+                    b.close();backends.remove(b)
+                    result['checks'].append('incorrect proxy credentials stop with exact local error before target HTTP')
                     checkpoint('negative-certificate')
                     destination[0]=bad.server.server_address
                     b=backend('bad-cert')
                     try:b.open(URL+'/search')
                     except Exception as exc:
                         result['bad_certificate_code']=getattr(exc,'code',type(exc).__name__)
+                        assert result['bad_certificate_code']=='tls_verification_failed', result['bad_certificate_code']
                     else:raise AssertionError('wrong-host certificate accepted')
                     assert not bad.requests,'browser sent HTTP despite wrong-host certificate'
                     b.close();backends.remove(b)
                     result['checks'].append('browser itself rejects wrong-host certificate before any HTTP; no ignore_https_errors')
                     result['requests']=good.requests
-                    assert all(r['agent_identified'] and r['proxy_secret_absent'] for r in good.requests), 'all redirects and operations must preserve application identity without proxy secrets'
+                    assert all(r['agent_identified'] and r['proxy_secret_absent'] and r['origin_secret_absent'] for r in good.requests), 'all redirects and operations must preserve application identity without proxy secrets'
                     assert all(host==HOST for host in good.sni+bad.sni)
                     result['success']=True
                     checkpoint('passed')

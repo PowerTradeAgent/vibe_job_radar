@@ -14,6 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        mode: [headless, headed]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -27,20 +28,23 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python -m playwright install --with-deps chromium
-          sudo apt-get install -y libnss3-tools
+          sudo apt-get install -y libnss3-tools xvfb
       - name: Compare public page CDP session on Windows
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.mode == 'headless'
         run: python scripts/probe_native_page_session.py --controlled --channel msedge
       - name: Verify native Chromium with artificial local TLS source
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.mode == 'headless'
         run: python scripts/run_native_auth_probe.py --controlled
+      - name: Verify headed native Chromium with artificial local TLS source
+        if: runner.os == 'Linux' && matrix.mode == 'headed'
+        run: xvfb-run -a python scripts/run_native_auth_probe.py --controlled --headed
       - name: Verify installed Edge with artificial local TLS source
         if: always() && runner.os == 'Windows'
-        run: python scripts/run_native_auth_probe.py --controlled --channel msedge
+        run: python scripts/run_native_auth_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Preserve native evidence including failures
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-browser-${{ runner.os }}
+          name: native-browser-${{ runner.os }}-${{ matrix.mode }}
           retention-days: 7
           path: browser-acceptance/native/
