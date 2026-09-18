@@ -309,6 +309,62 @@ class PlaywrightBackend:
                     return candidate
         return None
 
+    @traced('login_form', 'browser')
+    def login(self, username: str, password: str) -> bool:
+        """Fill only a visible same-platform login form; never persist credentials.
+
+        Returns True only when this method actually submitted credentials. A valid
+        existing in-memory session may return False and is verified by the
+        caller's subsequent real search/list read instead of a synthetic flag.
+        """
+        if not isinstance(username, str) or not username or not isinstance(password, str) or not password:
+            raise CrawlError('login_form_not_found')
+        self.open(self.adapter.login_url, authentication=True)
+        self.auth_mode = True
+
+        def fields():
+            return (self._visible(self.adapter.username_selectors),
+                    self._visible(self.adapter.password_selectors))
+
+        user, secret = fields()
+        if not (user and secret):
+            entry_selectors = getattr(self.adapter, 'login_entry_selectors', ())
+            entry = self._visible(entry_selectors)
+            if entry is not None:
+                entry.click(timeout=90000)
+                self._settle()
+                self._restore_open_page()
+                user, secret = fields()
+
+        # No form can also mean an already-authenticated in-memory session.
+        # Do not call that success here: the service immediately performs the
+        # real search, and only a usable list advances the task.
+        if not (user and secret):
+            return False
+
+        user.fill(username, timeout=6000)
+        secret.fill(password, timeout=6000)
+        submit = self._visible(self.adapter.submit_selectors)
+        if submit is None:
+            raise CrawlError('login_form_not_found')
+        submit.click(timeout=90000)
+        self._settle()
+        self._restore_open_page()
+        if not self.page or self.page.is_closed():
+            raise CrawlError('browser_closed')
+        current = urlsplit(self.page.url)
+        if (not current.hostname or not any(domain_matches(current.hostname, d)
+                                            for d in self.adapter.domains)):
+            raise CrawlError('login_origin_changed')
+        text = self.page.locator('body').inner_text(timeout=5000)
+        if self.adapter.challenged(text, self.page.url):
+            raise CrawlError('manual_required')
+        if re.search(r'短信.{0,8}验证码|验证码|扫码|二维码|安全验证', text):
+            raise CrawlError('manual_required')
+        if self._visible(self.adapter.password_selectors) is not None:
+            raise CrawlError('login_not_confirmed')
+        return True
+
     @traced('pagination', 'browser')
     def next_page(self) -> bool:
         self.auth_mode, self.error, self.redirects = False, None, 0
