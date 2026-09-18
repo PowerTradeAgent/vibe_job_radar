@@ -97,6 +97,10 @@ class NativeBackend(PlaywrightBackend):
         self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._page_created)
         self._cdp = self.browser.new_browser_cdp_session()
+        contexts = self._cdp.send('Target.getBrowserContexts')['browserContextIds']
+        if len(contexts) != 1:
+            raise CrawlError('native_protocol_error')
+        self._context_id = contexts[0]
         # A context extra-header UA can be dropped on native redirects. Set
         # the actual browser-reported UA plus our token on every owned target
         # before it runs; never rotate or impersonate another browser.
@@ -260,10 +264,20 @@ class NativeBackend(PlaywrightBackend):
                 return
             raise
 
+    def _target_in_context(self, info):
+        expected = getattr(self, '_context_id', None)
+        return expected is None or info.get('browserContextId') == expected
+
     def _attached(self, event):
         if self._closing:
             return
         info, session = event['targetInfo'], event['sessionId']
+        if not self._target_in_context(info):
+            # Chromium can emit an initial default-context blank target. It is
+            # not a page of our isolated collection context. Release only this
+            # automatic debugger attachment; do not cancel the collection.
+            self._cdp.send('Target.detachFromTarget', {'sessionId': session})
+            return
         if (info['type'] != 'page' or len(self._sessions) >= 8
                 or info.get('openerId') or not self._page_creation
                 or info.get('url', '') not in ('', 'about:blank')):
