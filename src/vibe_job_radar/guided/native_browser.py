@@ -165,6 +165,10 @@ class NativeBackend(PlaywrightBackend):
     def _send(self, session, method, params=None, callback=None):
         if self._closing:
             return
+        # Public page handles are local identifiers, never relay session IDs.
+        # A page can close while a synchronous CDP call yields to callbacks.
+        if session.startswith('page:') and session not in self._page_sessions:
+            return
         self._command += 1
         ident = self._command
         if len(self._pending) >= 512:
@@ -182,6 +186,10 @@ class NativeBackend(PlaywrightBackend):
                 'message':json.dumps({'id':ident, 'method':method, 'params':params or {}})})
         except Exception:
             self._pending.pop(ident, None)
+            # Only an explicitly retired/closed page can cancel an in-flight
+            # command harmlessly. Active-session protocol errors still fail.
+            if client is not None and session not in self._sessions:
+                return
             raise
 
     def _attached(self, event):
@@ -248,12 +256,40 @@ class NativeBackend(PlaywrightBackend):
             self._pending.pop(key, None)
         for key in [k for k in self._requests if k[0] == session]:
             self._requests.pop(key, None); self._hops.pop(key, None)
+        self._auth_attempts.difference_update(
+            key for key in tuple(self._auth_attempts) if key[0] == session)
+
+    def _close_owned_page(self, page):
+        """Retire callbacks before closing our temporary page, not its peers.
+
+        No Fetch.disable/continue is sent: pending requests die with the tab.
+        A close failure remains fatal; it is not a reason to resume a tab whose
+        controller is no longer registered.
+        """
+        session = self._bound_pages.get(page)
+        if session is not None:
+            self._detached({'sessionId': session})
+        try:
+            page.close()
+        except Exception:
+            self._fatal('native_protocol_error')
+            # The retired target is no longer in _sessions; close it explicitly.
+            if session is not None:
+                try:
+                    self._cdp.send('Target.closeTarget', {'targetId': session.removeprefix('page:')})
+                except Exception:
+                    self.cancelled.set()
+            raise CrawlError('native_protocol_error') from None
 
     def _received(self, event):
         if self._closing:
             return
         try:
             session = event['sessionId']
+            # Late events from a retired scratch tab must not poison the job
+            # tab or send its credentials through a stale protocol handle.
+            if session not in self._sessions:
+                return
             message = json.loads(event['message'])
             if 'id' in message:
                 entry = self._pending.pop(message['id'], None)
@@ -485,9 +521,11 @@ class NativeBackend(PlaywrightBackend):
                 code = self.error or self.tunnel.last_error or native_failure_code(exc)
                 raise CrawlError(code or 'robots_unavailable') from exc
             finally:
-                if scratch:
-                    scratch.close()
-                self._loading_robots=False; self._robots_url=''; self.page=main
+                try:
+                    if scratch:
+                        self._close_owned_page(scratch)
+                finally:
+                    self._loading_robots=False; self._robots_url=''; self.page=main
 
     @traced('navigation','browser',url=True)
     def open(self,url,*,authentication=False):
