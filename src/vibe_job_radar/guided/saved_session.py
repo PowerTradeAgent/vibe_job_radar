@@ -84,7 +84,8 @@ def _cookies(value, domains):
                 or not item['path'].startswith('/') or len(item['path']) > 2048
                 or item['sameSite'] not in {'Strict', 'Lax', 'None'}
                 or type(item['secure']) is not bool or type(item['httpOnly']) is not bool
-                or type(item['expires']) not in (int, float) or not math.isfinite(item['expires'])):
+                or type(item['expires']) not in (int, float) or not math.isfinite(item['expires'])
+                or (item['expires'] < 0 and item['expires'] != -1)):
             raise _error()
         # Partitioned cookies require a separately reviewed top-level-site
         # binding. Omitting their key would turn them into unpartitioned cookies.
@@ -165,7 +166,13 @@ class SavedSession:
             data = base64.b64decode(envelope['payload'], validate=True)
             if os.name == 'nt':
                 data = _dpapi(data, self.entropy, decrypt=True)
-            cookies = _cookies(json.loads(data), self.domains)
+            cookies = self._usable_cookies(json.loads(data))
+            if not cookies:
+                # No eligible cookie is not an authenticated/restored session.
+                # Remove only this lease's snapshot; records and quota survive.
+                self.forget()
+                self.status = 'empty'
+                return None
             self.status = 'restored_unverified'
             return {'cookies': cookies, 'origins': []}
         except CrawlError:
@@ -173,9 +180,22 @@ class SavedSession:
         except Exception:
             raise _error('saved_session_unreadable') from None
 
+    def _usable_cookies(self, cookies):
+        # Chromium uses -1 for session cookies; never invent a longer lifetime.
+        # Future cookie expiry only means eligible to restore, not authenticated.
+        now = self.clock()
+        return [item for item in _cookies(cookies, self.domains)
+                if item['expires'] == -1 or item['expires'] > now]
+
     def save(self, cookies):
         self._check()
-        cookies = _cookies(cookies, self.domains)
+        cookies = self._usable_cookies(cookies)
+        if not cookies:
+            # A normal logout or domain filtering must not leave an older
+            # login snapshot available to resurrect on the next startup.
+            self.forget()
+            self.status = 'empty'
+            return
         data = json.dumps(cookies, ensure_ascii=False, allow_nan=False).encode()
         if len(data) > MAX_BYTES // 2:
             raise _error()
