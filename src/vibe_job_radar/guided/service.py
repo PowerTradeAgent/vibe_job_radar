@@ -125,6 +125,12 @@ MESSAGES.update({
     'native_business_response_invalid': '已收到业务响应，但内容不是有效的结构化岗位数据。',
 })
 
+MESSAGES.update({
+    'login_form_not_found': '当前平台页没有找到可确认的账号/密码登录表单。会话保持打开；可在采集浏览器进入正常登录页后再自动填写，或人工完成登录。',
+    'login_not_confirmed': '账号密码已提交，但当前页面仍显示登录表单或未能确认进入已登录页面。会话保持打开；请核对账号、短信/验证码等平台要求。',
+    'native_login_unavailable': '原生实验后端尚未审查登录业务请求；自动填写登录仅在现有受控桥接路径启用，不会偷偷切换后端。',
+})
+
 
 class GuidedService:
     def __init__(self, workspace, *, registry: Registry | None = None, backend_factory=PlaywrightBackend,
@@ -287,11 +293,12 @@ class GuidedService:
     def action(self, data):
         ident, action = data.get('id'), data.get('action')
         state = self._load(ident)
-        if any(k in data for k in ('username','password','cookie','credential_consent')):
-            raise InputError('本向导不接收账号密码；请在平台原生浏览器页面登录。')
+        credential_keys = {'username', 'password', 'credential_consent'}
+        if action != 'login_auto' and any(k in data for k in credential_keys | {'cookie'}):
+            raise InputError('账号密码只允许用于“自动填写当前登录表单”，不会写入任务、报告或诊断。')
         if any(k in data for k in ('backend', 'native_consent', 'native_contract')):
             raise InputError('任务后端不可中途更换；新任务仍共享原配额。')
-        permitted = {'search', 'login', 'capture', 'more', 'collect', 'pause', 'stop', 'resume'}
+        permitted = {'search', 'login', 'login_auto', 'capture', 'more', 'collect', 'pause', 'stop', 'resume'}
         if action not in permitted:
             raise InputError('未知操作。')
         if action in {'pause','stop'}:
@@ -311,6 +318,20 @@ class GuidedService:
         if action == 'resume' and state['status'] in {'completed', 'stopped'}:
             return {'id': ident, 'message': '该任务已结束；已有报告保留。重新打开搜索请使用搜索按钮。'}
         secret = None
+        if action == 'login_auto':
+            if state.get('backend', 'bridge') == 'native':
+                raise InputError(MESSAGES['native_login_unavailable'])
+            if set(data) - {'id', 'action', 'username', 'password', 'credential_consent'}:
+                raise InputError('自动登录只接受任务编号、账号、密码和本次确认。')
+            if data.get('credential_consent') is not True:
+                raise InputError('自动填写登录表单前，请明确确认凭据仅用于本次本机会话。')
+            username, password = data.get('username'), data.get('password')
+            if (not isinstance(username, str) or not username.strip() or len(username) > 320
+                    or any(ord(ch) < 32 for ch in username)
+                    or not isinstance(password, str) or not password or len(password) > 1024
+                    or any(ch in '\r\n\x00' for ch in password)):
+                raise InputError('请输入有效账号和密码；密码不会写入任务文件。')
+            secret = {'username': username.strip(), 'password': password}
         if action == 'collect':
             ids = data.get('selected')
             known = {r['id'] for r in state['cards']}
@@ -745,7 +766,7 @@ class GuidedService:
             self._cancel.set()
             self._save(state,'paused',status='paused'); return
         adapter = self.registry.get(state['platform'])
-        if action == 'login':
+        if action in {'login', 'login_auto'}:
             try:
                 self.ledger.reserve(adapter.key, 'login')
             except RateLimit as exc:
@@ -760,6 +781,22 @@ class GuidedService:
             self._save(state, authentication='manual_pending')
             backend.open(adapter.login_url, authentication=True)
             self._save(state, 'manual_browser_open', status='waiting_manual', authentication='manual_pending')
+        elif action == 'login_auto':
+            # Credentials exist only in this worker invocation. They are never
+            # copied into state/report/diagnostics; the worker drops the secret
+            # in its existing finally block. A challenge keeps the same browser
+            # open so the user can finish the platform-required human step.
+            self._save(state, authentication='auto_pending')
+            try:
+                submitted = backend.login(secret['username'], secret['password'])
+            except CrawlError as exc:
+                if exc.code in {'manual_required', 'login_form_not_found', 'login_not_confirmed'}:
+                    self._save(state, authentication='human_step_required')
+                raise
+            self._save(state, authentication='auto_submitted' if submitted else 'session_reuse_attempt')
+            self._gather(state, backend, adapter, navigate=True)
+            if state['status'] == 'ready':
+                self._save(state, authentication='auto_resumed')
         elif action in {'capture','more','search'}:
             self._gather(state,backend,adapter,navigate=action=='search',more=action=='more')
         elif action in {'collect','resume'}:
