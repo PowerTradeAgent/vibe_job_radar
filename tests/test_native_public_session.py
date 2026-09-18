@@ -112,11 +112,16 @@ class NativePublicSessionTests(TestCase):
         self.b._bind_page.assert_not_called()
         page.close.assert_not_called()
 
-    def test_unsolicited_page_event_is_closed_not_adopted(self):
+    def test_unsolicited_page_event_stops_without_reentrant_close(self):
         self.b._bind_page = Mock()
         page = Mock(url='about:blank')
         self.b._page_created(page)
         self.b._bind_page.assert_not_called()
+        page.close.assert_not_called()
+        self.assertTrue(self.b.cancelled.is_set())
+        self.assertEqual(self.b._rejected_pages, [page])
+        page.is_closed.return_value = False
+        self.b._drain_rejected_pages()
         page.close.assert_called_once()
         self.assertEqual(self.b.error, 'native_surface_unsupported')
 
@@ -131,3 +136,35 @@ class NativePublicSessionTests(TestCase):
         self.assertIs(self.b._new_page(), page)
         self.b._bind_page.assert_called_once_with(page)
         self.assertEqual(self.b._page_creation, 0)
+
+
+    def test_same_rejected_target_is_closed_only_once_across_callbacks(self):
+        self.b._reject_target('popup')
+        self.b._reject_target('popup')
+        self.b._cdp.send.assert_called_once_with('Target.closeTarget', {'targetId':'popup'})
+
+    def test_reentrant_rejection_is_deduplicated_before_send(self):
+        self.b._cdp.send.side_effect = lambda *_: self.b._reject_target('popup')
+        self.b._reject_target('popup')
+        self.assertEqual(self.b._cdp.send.call_count, 1)
+
+    def test_browser_closed_popup_needs_no_second_close(self):
+        page=Mock()
+        self.b._page_created(page)
+        page.is_closed.return_value=True
+        self.b._drain_rejected_pages()
+        page.close.assert_not_called()
+        self.assertEqual(self.b._rejected_pages, [])
+
+    def test_closing_context_does_not_close_again_in_page_event(self):
+        self.b._closing=True
+        page=Mock()
+        self.b._page_created(page)
+        page.close.assert_not_called()
+
+    def test_rejected_target_tracking_has_a_hard_bound(self):
+        self.b._rejected_targets={str(n) for n in range(128)}
+        self.b._reject_target('overflow')
+        self.assertTrue(self.b.cancelled.is_set())
+        self.assertEqual(len(self.b._rejected_targets), 128)
+        self.assertEqual(self.b.error, 'native_surface_unsupported')

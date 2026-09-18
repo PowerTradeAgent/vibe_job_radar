@@ -32,6 +32,7 @@ from .native_browser import NativeBackend
 from .native_policy import capability as native_capability, contract_for
 from ..network_policy import current_policy
 from .contracts import CrawlError
+from .login_return import LoginReturnManager
 from .rate import RateLedger, RateLimit
 from .transport import diagnose_host
 from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
@@ -146,6 +147,7 @@ class GuidedService:
         self._active = None
         self._stop_ident = None
         self._backends = {}
+        self._login_return = LoginReturnManager()
         self._traces = {}  # Bounded in-memory metadata; no automatic disk export.
         self._thread = None
         self._last_install = 'not_started'
@@ -294,8 +296,11 @@ class GuidedService:
         permitted = {'search', 'login', 'capture', 'more', 'collect', 'pause', 'stop', 'resume'}
         if action not in permitted:
             raise InputError('未知操作。')
+        if 'auto_continue' in data and (action != 'login' or type(data['auto_continue']) is not bool):
+            raise InputError('自动接续只用于本次登录，必须明确勾选。')
         if action in {'pause','stop'}:
             with self._lock:
+                self._login_return.disarm(ident)
                 if self._busy and self._active is None:
                     raise InputError('浏览器安装正在运行；此任务按钮不能取消安装。')
                 if self._active and self._active != ident:
@@ -324,6 +329,10 @@ class GuidedService:
         with self._lock:
             if self._busy:
                 raise InputError('当前动作尚未结束，请先暂停或等待。')
+            self._login_return.disarm(ident)
+            if action == 'login':
+                state['auto_continue_after_login'] = data.get('auto_continue', False)
+            state['login_continuation'] = 'off'
             self._save(state, 'opening' if action in {'search','login'} else state['code'],
                        status='queued', auto_resume=False, next_allowed_at=None)
             self._submit(action, ident, secret)
@@ -757,7 +766,9 @@ class GuidedService:
         if action == 'login':
             # Save intent before open(): the native page itself can ask for
             # manual assistance and raise, but the original task must survive.
-            self._save(state, authentication='manual_pending')
+            watching = self._login_return.arm(state, backend)
+            self._save(state, authentication='manual_pending',
+                       login_continuation='watching' if watching else 'off')
             backend.open(adapter.login_url, authentication=True)
             self._save(state, 'manual_browser_open', status='waiting_manual', authentication='manual_pending')
         elif action in {'capture','more','search'}:
@@ -806,6 +817,10 @@ class GuidedService:
                 for backend in list(self._backends.values()):
                     try: backend.pump()
                     except Exception: pass
+                try:
+                    self._login_return.tick(self)
+                except Exception:
+                    pass  # Optional continuation must not terminate the worker.
                 continue
             try:
                 if action == 'install':

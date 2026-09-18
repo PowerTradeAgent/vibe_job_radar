@@ -53,6 +53,7 @@ function render(){
  if(requestedTask&&state.jobs.some(j=>j.id===requestedTask)){$('task').value=requestedTask;requestedTask='';}
  current=state.jobs.find(j=>j.id===$('task').value)||null;
  if(current&&loadedId!==current.id){selecting=new Set(current.selection||[]);loadedId=current.id;}
+ $('login-return-status').textContent=current?({watching:'等待平台返回本任务原检索页；列表连续可读后自动继续，最长10分钟。不会自动填密或绕过验证。',resumed:'已识别本任务可读列表，已自动接回任务；不等于账号认证证明。',timed_out:'自动接续等待已结束；会话未删除，可按原按钮继续。',needs_attention:'当前页面或网络需要处理，自动接续已停止。',cancelled:'自动接续已取消。'}[current.login_continuation]||''):'';
  if(current){$('resume').textContent=current.authentication==='manual_pending'?'登录完成，继续原任务':'继续原任务';$('task-status').textContent=`${current.backend==='native'?'原生网络实验':'原有HTTP桥'} · ${statusNames[current.status]||current.status}：${current.message}`;
  if(current.code==='non_public_address'||current.code==='dns_error'||current.code?.startsWith('encrypted_dns_')){
  $('task-status').textContent+='\n此页面请求由本程序在网络校验阶段中止；采集浏览器可能显示 ERR_BLOCKED_BY_CLIENT。它不等于平台封禁或 Edge 自身拒绝。请检查同一平台的当前网络策略；旧任务错误与新诊断不是同一次请求。';
@@ -77,7 +78,7 @@ function renderCards(){const root=$('cards');root.replaceChildren();if(!current.
 async function refresh(){state=await api('/api/guided/state');render();}
 $('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(async()=>{const data=Object.fromEntries(new FormData(f));data.roles=[data.role];delete data.role;data.max_pages=Number(data.max_pages);data.max_jobs=Number(data.max_jobs);data.consent=f.elements.consent.checked;data.diagnostics=f.elements.diagnostics.checked;data.native_consent=f.elements.native_consent.checked;const r=await api('/api/guided/create',data);loadedId='';await refresh();$('task').value=r.id;render();});});
 $('task').addEventListener('change',()=>{loadedId='';render();});
-for(const [button,action] of Object.entries({'login':'login','capture':'capture','search-again':'search','pause':'pause','resume':'resume','stop':'stop'}))$(button).addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action})));
+for(const [button,action] of Object.entries({'login':'login','capture':'capture','search-again':'search','pause':'pause','resume':'resume','stop':'stop'}))$(button).addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action,...(action==='login'?{auto_continue:$('auto-login-return').checked}:{})})));
 $('collect').addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action:'collect',selected:[...selecting]})));
 $('select-all').addEventListener('click',()=>{if(!current)return;selecting=new Set(current.cards.slice(0,current.max_jobs).map(c=>c.id));renderCards();});
 $('use-browser-choice').addEventListener('click',()=>{

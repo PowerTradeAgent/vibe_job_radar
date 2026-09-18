@@ -75,6 +75,8 @@ class NativeBackend(PlaywrightBackend):
         self._adopting = set()
         self._page_sessions, self._bound_pages = {}, {}
         self._page_creation = 0
+        self._rejected_targets = set()
+        self._rejected_pages = []
         self.native_counts = {'document':0, 'business':0, 'asset':0, 'robots':0, 'login':0,
                               'blocked':0, 'responses':0}
         super().__init__(adapter, ledger, cancelled, progress, headless=headless,
@@ -103,15 +105,40 @@ class NativeBackend(PlaywrightBackend):
             'waitForDebuggerOnStart':True, 'flatten':True})
 
     def _page_created(self, page):
-        # Playwright emits this event while context.new_page() is still
-        # returning. Do not initialize the public CDP session in that callback:
-        # a synchronous protocol call yields to the caller's greenlet and can
-        # make _new_page() bind the same page a second time. The caller alone
-        # installs controls, before any navigation. Unsolicited pages stop here.
-        if not self._page_creation or self._closing:
-            page.close()
-            if not self._closing:
-                self._fatal('native_surface_unsupported')
+        # Never synchronously close a popup from its creation event. Chromium
+        # may be waiting for that very event to finish window.open(), while the
+        # browser Target guard is already closing the paused target. Closing
+        # again here can deadlock headed Edge. No page is admitted in this path.
+        if self._closing:
+            return
+        if not self._page_creation:
+            self.cancelled.set()  # Opaque tunnel also stops, even for an unexpected target.
+            self._fatal('native_surface_unsupported')
+            pending = self.__dict__.setdefault('_rejected_pages', [])
+            if len(pending) < 8 and page not in pending:
+                pending.append(page)
+
+    def _reject_target(self, target):
+        # Root and parent CDP attachments can report the same popup. Mark first,
+        # before send() yields, and let the browser guard close it exactly once.
+        rejected = self.__dict__.setdefault('_rejected_targets', set())
+        if target in rejected:
+            return
+        if len(rejected) >= 128:
+            self.cancelled.set()
+            self._fatal('native_surface_unsupported')
+            return
+        rejected.add(target)
+        self._cdp.send('Target.closeTarget', {'targetId': target})
+
+    def _drain_rejected_pages(self):
+        # Runs on the owner worker, not inside a popup/target event. Usually the
+        # Target guard already closed the page. No intercepted request resumes.
+        pending = self.__dict__.setdefault('_rejected_pages', [])
+        while pending:
+            page = pending.pop(0)
+            if not page.is_closed():
+                page.close()
 
     def _new_page(self):
         # Only application-requested blank tabs can become controlled surfaces.
@@ -199,7 +226,7 @@ class NativeBackend(PlaywrightBackend):
         if (info['type'] != 'page' or len(self._sessions) >= 8
                 or info.get('openerId') or not self._page_creation
                 or info.get('url', '') not in ('', 'about:blank')):
-            self._cdp.send('Target.closeTarget', {'targetId':info['targetId']})
+            self._reject_target(info['targetId'])
             return
         target = info['targetId']
         if session in self._sessions or target in self._adopting:
@@ -303,7 +330,7 @@ class NativeBackend(PlaywrightBackend):
             method, data = message.get('method'), message.get('params', {})
             if method == 'Target.attachedToTarget':
                 # Dedicated/shared workers and OOPIFs are unsupported surfaces.
-                self._cdp.send('Target.closeTarget', {'targetId':data['targetInfo']['targetId']})
+                self._reject_target(data['targetInfo']['targetId'])
             elif method == 'Fetch.requestPaused':
                 self._paused(session, data)
             elif method == 'Fetch.authRequired':
@@ -583,6 +610,7 @@ class NativeBackend(PlaywrightBackend):
             self._halted = False
 
     def pump(self):
+        self._drain_rejected_pages()
         if not self._closing and not getattr(self, 'policy_check', lambda: True)():
             self._fatal('native_policy_changed')
         super().pump()
@@ -595,3 +623,4 @@ class NativeBackend(PlaywrightBackend):
         self._sessions.clear(); self._pending.clear(); self._requests.clear(); self._hops.clear()
         self._observations.clear(); self._auth_attempts.clear()
         self._page_sessions.clear(); self._bound_pages.clear()
+        self._rejected_targets.clear(); self._rejected_pages.clear()
