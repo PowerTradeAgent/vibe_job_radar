@@ -1,7 +1,7 @@
 """Local guided task service. All browser calls stay on one owning thread.
 
 UI requests enqueue actions and return immediately. Jobs and quotas survive process
-restarts; live sessions/passwords do not. Dependency injection enables offline tests.
+restarts; cookie sessions are opt-in and local; passwords are never accepted. Dependency injection enables offline tests.
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ from ..network_policy import current_policy
 from .contracts import CrawlError
 from .login_return import LoginReturnManager
 from .session_reuse import reuse_current_session
+from .saved_session import SavedSession
 from .rate import RateLedger, RateLimit
 from .transport import diagnose_host
 from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
@@ -44,6 +45,12 @@ from .browser_choice import BrowserChoice, CHOICES, validate_choice
 from .. import tls_context
 
 MESSAGES = {
+    'saved_session_invalid': '保存的会话格式无效。未启动新的采集；请清除该平台保存的会话后正常登录。',
+    'saved_session_incompatible': '保存会话的工作区、平台版本、后端、浏览器或网络设置不匹配。未自动换身份重试；请明确清除该平台保存的会话。',
+    'saved_session_unreadable': '保存的会话无法读取或解密。请使用原 Windows 用户，或清除后重新正常登录。',
+    'saved_session_unsafe': '会话目录或文件权限不安全，或存在链接。未读取登录资料；请检查本机 .radar-sessions 目录。',
+    'saved_session_busy': '另一个程序正在使用此平台保存的会话，或无法取得文件锁。不会并发复用身份。',
+    'saved_session_cleared': '该平台保存的会话已清除，当前会话已关闭。岗位、报告、个人证据与配额保留。',
     'session_reuse_unavailable': '当前采集会话不是可复用的空闲会话。请先完成原任务的登录/等待，或停止该会话；不会自动另开浏览器重试。',
     'session_reuse_incompatible': '当前会话的平台、后端、浏览器或网络设置不匹配。请保留原任务，或明确停止旧会话后再开始；不会串用身份。',
     'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
@@ -61,7 +68,7 @@ MESSAGES = {
     'completed': '本批次已结束。请查看每条结果和报告；有报告不等于所有岗位均采集成功。',
     'paused': '已请求暂停；当前网络调用结束后停止。没有完成的岗位保留，可继续。',
     'stopped': '任务已停止，采集浏览器已关闭。已保存结果保留。',
-    'interrupted': '程序曾退出；登录状态未保留。请重新打开/登录，已完成岗位不会重复采集。',
+    'interrupted': '程序曾退出，浏览器已关闭。明确保留的本站 Cookie 可尝试恢复；其他情况请正常重新登录。已完成岗位不会重复采集。',
     'non_public_address': '域名解析到了非公网地址（可能为 198.18.* Fake-IP）。点击“网络检查”查看地址；先修正代理/DNS，不要重复增加采集预算。',
     'dns_error': '域名解析失败。检查本机 DNS/网络后重试；此错误与账号密码无关。',
     'robots_denied': '当前站点 robots 规则不允许此自动访问路径；本程序已停止。可使用获准接口或回基础页粘贴有权处理的正文。',
@@ -150,6 +157,7 @@ class GuidedService:
         self._active = None
         self._stop_ident = None
         self._backends = {}
+        self._session_leases = {}
         self._login_return = LoginReturnManager()
         self._traces = {}  # Bounded in-memory metadata; no automatic disk export.
         self._thread = None
@@ -239,7 +247,9 @@ class GuidedService:
                                        'last_check': self._choice.historical_view(self._choice_data, self._package())},
                     'browser_health': copy.deepcopy(self._browser_health), 'setup': copy.deepcopy(self._setup),
                     'python': sys.executable, 'roles': {k: v['label'] for k,v in self.workspace.config['roles'].items()},
-                    'sessions_persisted': False, 'external_site_certification': False}
+                    'sessions_persisted': any(j.get('saved_session_status') == 'saved_unverified' for j in jobs),
+                    'session_storage_scope': 'opt_in_cookies_only_not_account_certification',
+                    'external_site_certification': False}
 
     @staticmethod
     def _package():
@@ -250,6 +260,8 @@ class GuidedService:
 
     def create(self, data):
         adapter = self.registry.get(data.get('platform'))
+        if type(data.get('persist_session', False)) is not bool:
+            raise InputError('在本机保留会话必须为明确的布尔选项。')
         if type(data.get('reuse_current_session', False)) is not bool:
             raise InputError('复用当前采集会话必须为明确的布尔选项。')
         if type(data.get('diagnostics', False)) is not bool:
@@ -284,7 +296,8 @@ class GuidedService:
                  'phase': 'search', 'selection': [], 'created_at': utc_now(), 'updated_at': utc_now(),
                  'authentication': 'not_checked', 'certification': 'not_live_verified',
                  'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode,
-                 'reuse_current_session': data.get('reuse_current_session', False), 'session_reused': False}
+                 'reuse_current_session': data.get('reuse_current_session', False), 'session_reused': False,
+                 'persist_session': data.get('persist_session', False), 'saved_session_status': 'off'}
         with self._lock:
             if self._busy:
                 raise InputError('已有任务运行，请先暂停。')
@@ -297,11 +310,13 @@ class GuidedService:
         state = self._load(ident)
         if any(k in data for k in ('username','password','cookie','credential_consent')):
             raise InputError('本向导不接收账号密码；请在平台原生浏览器页面登录。')
-        if any(k in data for k in ('backend', 'native_consent', 'native_contract')):
+        if any(k in data for k in ('backend', 'native_consent', 'native_contract', 'persist_session', 'storage_state')):
             raise InputError('任务后端不可中途更换；新任务仍共享原配额。')
-        permitted = {'search', 'login', 'capture', 'more', 'collect', 'pause', 'stop', 'resume'}
+        permitted = {'search', 'login', 'capture', 'more', 'collect', 'pause', 'stop', 'resume', 'forget_session'}
         if action not in permitted:
             raise InputError('未知操作。')
+        if action == 'forget_session' and data.get('confirm') is not True:
+            raise InputError('清除该平台保存的会话需要明确确认。')
         if 'auto_continue' in data and (action != 'login' or type(data['auto_continue']) is not bool):
             raise InputError('自动接续只用于本次登录，必须明确勾选。')
         if action in {'pause','stop'}:
@@ -549,6 +564,61 @@ class GuidedService:
                 'schema_version': 1, 'trace_id': state['id'], 'enabled': False,
                 'events': [], 'scope': '诊断未启用或不可用；没有读取浏览器、联网或导出任务正文。'}
 
+    def _new_session_lease(self, state):
+        return SavedSession(self.workspace.root, self.registry.get(state['platform']),
+                            backend=state.get('backend', 'bridge'), browser=self._selected_browser,
+                            network=current_policy().fingerprint)
+
+    def _close_backend(self, ident):
+        backend = self._backends.pop(ident, None)
+        try:
+            if backend:
+                backend.close()
+        finally:
+            lease = self._session_leases.pop(ident, None)
+            if lease:
+                lease.close()
+
+    def _checkpoint_session(self, state):
+        lease = self._session_leases.get(state['id'])
+        backend = self._backends.get(state['id'])
+        if (not lease or not backend or not state.get('persist_session')
+                or state.get('status') not in {'ready', 'completed'} or not state.get('cards')
+                or getattr(backend, 'auth_mode', False) or getattr(backend, 'error', None)
+                or self._cancel.is_set()):
+            return
+        try:
+            lease.save(backend.export_session_cookies())
+            self._save(state, saved_session_status=lease.status, saved_session_error='')
+        except Exception as exc:
+            # Persistence failure must not discard already collected JDs/reports.
+            code = exc.code if isinstance(exc, CrawlError) else 'saved_session_unreadable'
+            self._save(state, saved_session_status='save_failed', saved_session_error=code)
+
+    def _forget_session(self, state):
+        platform = state['platform']
+        for ident, backend in list(self._backends.items()):
+            if backend.adapter.key == platform:
+                self._login_return.disarm(ident)
+                self._close_backend(ident)
+        lease = self._new_session_lease(state)
+        try:
+            lease.forget()
+        finally:
+            lease.close()
+        # Revocation applies to this platform in this workspace, including old
+        # tasks. Their later resume must not silently re-enable persistence.
+        for path in self.root.glob('*.json'):
+            try:
+                task = self._load(path.stem)
+            except InputError:
+                continue
+            if task.get('platform') == platform:
+                self._save(task, persist_session=False, saved_session_status='cleared',
+                           saved_session_error='', login_continuation='off')
+        self._save(state, 'saved_session_cleared', status='paused', persist_session=False,
+                   saved_session_status='cleared', saved_session_error='', login_continuation='off')
+
     @traced('browser_session', 'service', state_index=0)
     def _backend(self, state):
         if self._restart_required:
@@ -557,22 +627,41 @@ class GuidedService:
             raise BrowserStartupError(failed_report(environment_report(),
                 ValueError('invalid saved browser selection'), code='browser_choice_invalid'))
         ident = state['id']
-        reuse_current_session(self, state)
+        if reuse_current_session(self, state):
+            old = state['session_source_task']
+            if old in self._session_leases:
+                self._session_leases[ident] = self._session_leases.pop(old)
         previous = self._backends.get(ident)
         native = state.get('backend', 'bridge') == 'native'
         if native and previous and previous.wire.network_policy.fingerprint != current_policy().fingerprint:
-            self._backends.pop(ident).close()
+            self._close_backend(ident)
             raise CrawlError('native_policy_changed')
         if previous and hasattr(previous, 'alive') and not previous.alive():
-            self._backends.pop(ident).close()
+            self._close_backend(ident)
         if ident not in self._backends:
             for old in list(self._backends):
-                self._backends.pop(old).close()
+                self._close_backend(old)
             def progress(code, seconds):
                 self._save(state, code, wait_seconds=seconds)
             factory = self.native_factory if native else self.factory
-            self._backends[ident] = factory(self.registry.get(state['platform']), self.ledger, self._cancel, progress,
-                **({'channel': self._selected_browser} if self._selected_browser != 'bundled' else {}))
+            options = {'channel': self._selected_browser} if self._selected_browser != 'bundled' else {}
+            lease = None
+            try:
+                if state.get('persist_session'):
+                    lease = self._new_session_lease(state)
+                    restored = lease.restore()
+                    if restored is not None:
+                        options['storage_state'] = restored
+                    self._save(state, saved_session_status=lease.status,
+                               authentication='restored_session_unverified' if restored is not None else 'not_checked')
+                self._backends[ident] = factory(self.registry.get(state['platform']), self.ledger,
+                                               self._cancel, progress, **options)
+                if lease:
+                    self._session_leases[ident] = lease
+            except Exception:
+                if lease:
+                    lease.close()
+                raise
             health = getattr(self._backends[ident], 'startup_report', None)
             if health:
                 with self._lock:
@@ -753,9 +842,11 @@ class GuidedService:
 
     @traced('task', 'service', state_index=1)
     def _run(self, action, state, secret):
+        if action == 'forget_session':
+            self._forget_session(state)
+            return
         if action == 'close':
-            backend = self._backends.pop(state['id'],None)
-            if backend: backend.close()
+            self._close_backend(state['id'])
             self._save(state,'stopped',status='stopped'); return
         if action == 'pause_idle':
             self._cancel.set()
@@ -845,6 +936,7 @@ class GuidedService:
                     policy = self.workspace.network_policy()
                 with use_policy(policy):
                     self._run(action,state,secret)
+                    self._checkpoint_session(state)
                 if state['status'] in {'completed','stopped','paused','ready'}:
                     self._cancel.set()
             except Exception as exc:
@@ -861,8 +953,7 @@ class GuidedService:
                         current = self._load(ident)
                         stopping = self._stop_ident == ident
                         if stopping:
-                            backend = self._backends.pop(ident,None)
-                            if backend: backend.close()
+                            self._close_backend(ident)
                             self._save(state,'stopped',status='stopped')
                         else:
                             if isinstance(exc, BrowserStartupError):
@@ -888,17 +979,14 @@ class GuidedService:
                 secret = None
                 if ident and self._stop_ident == ident:
                     self._stop_ident = None
-                    backend = self._backends.pop(ident, None)
-                    if backend:
-                        backend.close()
+                    self._close_backend(ident)
                     self._save(self._load(ident), 'stopped', status='stopped')
                 with self._lock:
                     self._busy, self._active = False, None
                 self._queue.task_done()
-        for backend in list(self._backends.values()):
-            try: backend.close()
+        for ident in list(self._backends):
+            try: self._close_backend(ident)
             except Exception: pass
-        self._backends.clear()
 
     def close(self):
         self._cancel.set(); self._shutdown.set()

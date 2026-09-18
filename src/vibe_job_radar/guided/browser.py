@@ -22,7 +22,7 @@ from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_r
 
 class PlaywrightBackend:
     def __init__(self, adapter, ledger, cancelled, progress=lambda *_: None, *,
-                 headless=False, executable_path=None, transport_factory=PinnedTransport, channel=None):
+                 headless=False, executable_path=None, transport_factory=PinnedTransport, channel=None, storage_state=None):
         if channel not in (None, 'msedge') or (channel and executable_path):
             raise ValueError('unsupported browser choice')
         self.adapter, self.cancelled = adapter, cancelled
@@ -97,7 +97,10 @@ class PlaywrightBackend:
             self.startup_report.update(stage='context', executable_exists=True)
             if channel:
                 self.startup_report['browser_version'] = self.browser.version
-            self.context = self.browser.new_context(service_workers='block', accept_downloads=False)
+            context_options = {'service_workers': 'block', 'accept_downloads': False}
+            if storage_state is not None:
+                context_options['storage_state'] = storage_state
+            self.context = self.browser.new_context(**context_options)
             self._configure_context()
             self.page = self._new_page()
             self.page.set_default_timeout(6000)
@@ -342,6 +345,10 @@ class PlaywrightBackend:
         # Keeps a visible browser responsive while waiting for manual assistance.
         if self.page and not self.page.is_closed():
             self.page.wait_for_timeout(50)
+
+    def export_session_cookies(self):
+        # Browser-owned context only; no hidden pages, HTTP, DOM or form fields.
+        return self.context.cookies()
 
     def alive(self):
         self._restore_open_page()

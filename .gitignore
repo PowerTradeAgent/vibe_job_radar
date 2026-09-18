@@ -147,3 +147,6 @@ release-candidate/
 
 # Locally generated reports, never source payload.
 /runs/
+
+# Private opt-in browser cookie snapshots and locks (never source/artifacts).
+.radar-sessions/

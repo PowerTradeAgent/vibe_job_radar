@@ -103,7 +103,7 @@ def main():
         server.guided.close()
         ledger=RateLedger(Path(tmp)/'guided'/'rates.sqlite',Limits(page_interval=0,request_interval=0,login_interval=0))
         server.guided=GuidedService(workspace,registry=Registry([adapter]),ledger=ledger,
-            backend_factory=lambda a,l,c,p:ManualFixtureBackend(a,l,c,p,headless=True,executable_path=executable,transport_factory=FixtureWire))
+            backend_factory=lambda a,l,c,p,**saved:ManualFixtureBackend(a,l,c,p,headless=True,executable_path=executable,transport_factory=FixtureWire,**saved))
         thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);thread.start()
         try:
             with sync_playwright() as pw:
@@ -186,6 +186,8 @@ def main():
                 form.locator('details:has(input[name=list_url]) > summary').click()
                 form.locator('[name=list_url]').fill('https://jobs.fixture.test/search')
                 form.locator('[name=rights_note]').fill('独立自动接续验收；仅人工站点，不是市场数据。')
+                expect(form.locator('[name=persist_session]')).not_to_be_checked()
+                form.locator('[name=persist_session]').check()
                 form.locator('[name=consent]').check()
                 page.locator('#find').click()
                 expect(page.locator('#task-status')).to_contain_text('需要你操作',timeout=30000)
@@ -232,6 +234,41 @@ def main():
                 page.locator('#stop').click()
                 expect(page.locator('#task-status')).to_contain_text('已停止',timeout=15000)
                 assert current_id not in server.guided._backends
+
+                # Reconstruct the service AND launch a new collection browser.
+                # Only the on-disk opt-in cookies can authenticate the first query.
+                expect(page.locator('#saved-session-status')).to_contain_text('已保存到本机')
+                assert (Path(tmp)/'.radar-sessions/fixture.json').is_file()
+                server.guided.close()
+                assert previous_backend.browser is None
+                server.guided=GuidedService(workspace,registry=Registry([adapter]),
+                    ledger=RateLedger(Path(tmp)/'guided'/'rates.sqlite',Limits(page_interval=0,request_interval=0,login_interval=0)),
+                    backend_factory=lambda a,l,c,p,**saved:ManualFixtureBackend(a,l,c,p,headless=True,
+                        executable_path=executable,transport_factory=FixtureWire,**saved))
+                form.locator('[name=reuse_current_session]').uncheck()
+                form.locator('[name=list_url]').fill('https://jobs.fixture.test/search?q=after-restart')
+                page.locator('#find').click()
+                expect(page.locator('#task')).not_to_have_value(current_id,timeout=30000)
+                expect(page.locator('#task-status')).to_contain_text('可以选择岗位',timeout=30000)
+                expect(page.locator('#cards .card')).to_have_count(2,timeout=30000)
+                expect(page.locator('#saved-session-status')).to_contain_text('已保存到本机',timeout=30000)
+                restarted_id=page.locator('#task').input_value()
+                assert server.guided._backends[restarted_id] is not previous_backend
+                assert server.guided._load(restarted_id)['authentication']=='restored_session_unverified'
+                assert CALLS.count(('POST','/login'))==login_posts
+                page.locator('#cards input[type=checkbox]').first.check();page.locator('#collect').click()
+                expect(page.locator('#result')).to_contain_text('已保存 1 个岗位',timeout=30000)
+                assert server.guided._load(previous_id)['report_id']==previous_report
+                assert 'fixture_login' not in json.dumps(server.guided.state())
+                result['checks'].append('opt-in cookies restore into a new service and new collection browser; no additional login POST, full selected JD reaches report, old reports remain')
+                page.once('dialog',lambda dialog:dialog.accept())
+                page.locator('#forget-session').click()
+                expect(page.locator('#task-status')).to_contain_text('保存的会话已清除',timeout=30000)
+                assert not (Path(tmp)/'.radar-sessions/fixture.json').exists()
+                assert not server.guided._backends
+                assert not server.guided._load(previous_id)['persist_session']
+                assert server.guided._load(previous_id)['report_id']==previous_report
+                result['checks'].append('explicit forget closes the collection browser, removes private snapshot and revokes old task persistence without deleting reports or quotas')
 
                 page.set_viewport_size({'width':390,'height':844})
                 page.screenshot(path=str(output/'guided-mobile.png'),full_page=True)
