@@ -8,7 +8,7 @@ if (location.hash) history.replaceState(null,'',location.pathname+location.searc
 let requestedTask=new URLSearchParams(location.search).get('task')||'';
 let state=null, current=null, selecting=new Set(), loadedId='', requesting=false, sticky='';
 const installationNames={restart_required:'组件更新后需重启工作台再检查',not_started:'本次会话未执行安装（不表示缺少组件）',installing:'正在安装',installed:'安装并启动验证成功',installed_not_ready:'安装命令成功，但启动检查失败',dependency_install_failed:'安装失败',dependency_install_timeout:'安装超时'};
-const cardStatus={discovered:'待选择',opening:'读取中',ok:'正文已保存',structure_changed:'无法确认独立完整正文',invalid_job_data:'岗位字段无效或正文超出限制',not_job_url:'不是已识别的详情地址',manual_required:'需要正常登录或验证',http_401:'需要核对登录或权限',http_403:'站点拒绝访问',http_429:'来源要求等待',paused:'已暂停',network_error:'网络未完成'};
+const cardStatus={job_identity_mismatch:'详情身份不一致，未保存',jd_incomplete:'正文尚未完整展开，未保存',discovered:'待选择',opening:'读取中',ok:'正文已保存',structure_changed:'无法确认独立完整正文',invalid_job_data:'岗位字段无效或正文超出限制',not_job_url:'不是已识别的详情地址',manual_required:'需要正常登录或验证',http_401:'需要核对登录或权限',http_403:'站点拒绝访问',http_429:'来源要求等待',paused:'已暂停',network_error:'网络未完成'};
 const statusNames={queued:'准备中',running:'执行中',ready:'可以选择岗位',waiting_rate:'按来源要求等待',waiting_manual:'需要你处理',paused:'已暂停',completed:'批次结束',stopped:'已停止',interrupted:'上次服务已退出'};
 async function api(path,data){const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:{'X-Radar-Token':token,...(data===undefined?{}:{'Content-Type':'application/json'})},body:data===undefined?undefined:JSON.stringify(data),cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'操作失败');return result;}
 function note(text){$('busy').textContent=text;}
@@ -21,7 +21,7 @@ function render(){
  const tls=state.tls_environment;
  if(tls){
   $('tls-repair').hidden=!tls.windows;
-  $('tls-environment').textContent='TLS 验证引擎：'+tls.engine+' · '+tls.reason+(tls.restart_required?' · 组件操作后需重新启动工作台':'');
+  $('tls-environment').textContent='TLS 验证引擎：'+tls.engine+' · '+tls.reason+(tls.restart_required?' · 组件操作后需重新启动工作台再检查':'');
  }
  const choice=state.browser_choice;
  if(choice){
