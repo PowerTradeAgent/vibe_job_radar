@@ -67,9 +67,17 @@ def trust_fixture(root):
     if sys.platform=='win32':
         if not os.environ.get('CI'):
             raise RuntimeError('Windows test trust is restricted to an explicit CI runner')
-        subprocess.run(['certutil','-user','-addstore','Root',str(ca_path)],check=True,capture_output=True)
-        try:yield
-        finally:subprocess.run(['certutil','-user','-delstore','Root',fingerprint],check=True,capture_output=True)
+        # Use the Windows tool explicitly, not an NSS namesake on PATH. The
+        # fixture is already explicitly enabled on an ephemeral CI runner. -f
+        # prevents an interactive root-import confirmation from hanging CI.
+        tool=str(Path(os.environ['SystemRoot'])/'System32'/'certutil.exe')
+        try:
+            subprocess.run([tool,'-f','-user','-addstore','Root',str(ca_path)],
+                check=True,capture_output=True,stdin=subprocess.DEVNULL,timeout=30)
+            yield
+        finally:
+            subprocess.run([tool,'-user','-delstore','Root',fingerprint],
+                check=True,capture_output=True,stdin=subprocess.DEVNULL,timeout=30)
     elif sys.platform.startswith('linux'):
         home=root/'isolated-home';db=home/'.pki/nssdb';db.mkdir(parents=True)
         tool=shutil.which('certutil')
