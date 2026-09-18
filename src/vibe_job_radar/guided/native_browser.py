@@ -88,7 +88,7 @@ class NativeBackend(PlaywrightBackend):
 
     def _configure_context(self):
         self.context.route_web_socket('**/*', lambda ws: ws.close())
-        self.context.on('page', self._bind_page)
+        self.context.on('page', self._page_created)
         self._cdp = self.browser.new_browser_cdp_session()
         # A context extra-header UA can be dropped on native redirects. Set
         # the actual browser-reported UA plus our token on every owned target
@@ -101,6 +101,17 @@ class NativeBackend(PlaywrightBackend):
         # no Playwright private internals or remote-debugging TCP port.
         self._cdp.send('Target.setAutoAttach', {'autoAttach':True,
             'waitForDebuggerOnStart':True, 'flatten':True})
+
+    def _page_created(self, page):
+        # Playwright emits this event while context.new_page() is still
+        # returning. Do not initialize the public CDP session in that callback:
+        # a synchronous protocol call yields to the caller's greenlet and can
+        # make _new_page() bind the same page a second time. The caller alone
+        # installs controls, before any navigation. Unsolicited pages stop here.
+        if not self._page_creation or self._closing:
+            page.close()
+            if not self._closing:
+                self._fatal('native_surface_unsupported')
 
     def _new_page(self):
         # Only application-requested blank tabs can become controlled surfaces.

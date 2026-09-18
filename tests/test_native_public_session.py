@@ -103,3 +103,31 @@ class NativePublicSessionTests(TestCase):
         self.b._detached({'sessionId':'session'})
         self.assertEqual(self.b._page_sessions,{})
         self.assertEqual(self.b._bound_pages,{})
+
+    def test_owned_page_event_defers_binding_to_its_caller(self):
+        self.b._page_creation = 1
+        self.b._bind_page = Mock()
+        page = Mock(url='about:blank')
+        self.b._page_created(page)
+        self.b._bind_page.assert_not_called()
+        page.close.assert_not_called()
+
+    def test_unsolicited_page_event_is_closed_not_adopted(self):
+        self.b._bind_page = Mock()
+        page = Mock(url='about:blank')
+        self.b._page_created(page)
+        self.b._bind_page.assert_not_called()
+        page.close.assert_called_once()
+        self.assertEqual(self.b.error, 'native_surface_unsupported')
+
+    def test_creation_event_and_return_initialize_the_page_only_once(self):
+        page = Mock(url='about:blank')
+        def create():
+            self.b._page_created(page)
+            return page
+        self.b.context = Mock()
+        self.b.context.new_page.side_effect = create
+        self.b._bind_page = Mock()
+        self.assertIs(self.b._new_page(), page)
+        self.b._bind_page.assert_called_once_with(page)
+        self.assertEqual(self.b._page_creation, 0)
