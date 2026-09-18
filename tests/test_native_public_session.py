@@ -197,3 +197,47 @@ class NativePublicSessionTests(TestCase):
             self.b._drain_rejected_pages()
         self.assertEqual(caught.exception.code,'native_protocol_error')
         self.assertTrue(self.b.cancelled.is_set())
+
+    def test_owned_main_frame_continues_without_headers_or_body_overrides(self):
+        page, frame, route = Mock(), Mock(), Mock()
+        page.main_frame=frame;frame.page=page;route.request.frame=frame
+        self.b._bound_pages[page]='page:owned'
+        self.b._page_sessions['page:owned']=Mock()
+        self.b._ownership_route(route)
+        route.continue_.assert_called_once_with()
+        route.abort.assert_not_called()
+        route.fetch.assert_not_called();route.fulfill.assert_not_called()
+
+    def test_popup_first_request_is_aborted_before_it_gets_page_controls(self):
+        route=Mock()
+        self.b._ownership_route(route)
+        route.abort.assert_called_once_with('blockedbyclient')
+        route.continue_.assert_not_called()
+        self.assertTrue(self.b.cancelled.is_set())
+
+    def test_owned_page_subframe_is_not_admitted(self):
+        page, frame, route = Mock(), Mock(), Mock()
+        frame.page=page;route.request.frame=frame
+        self.b._bound_pages[page]='page:owned'
+        self.b._page_sessions['page:owned']=Mock()
+        self.b._ownership_route(route)
+        route.abort.assert_called_once_with('blockedbyclient')
+        route.continue_.assert_not_called()
+
+    def test_retired_page_cannot_continue_after_frame_race(self):
+        page, frame, route = Mock(), Mock(), Mock()
+        page.main_frame=frame;frame.page=page;route.request.frame=frame
+        self.b._bound_pages[page]='page:retired'
+        self.b._ownership_route(route)
+        route.abort.assert_called_once_with('blockedbyclient')
+        route.continue_.assert_not_called()
+
+    def test_cancellation_blocks_even_an_owned_main_frame(self):
+        page, frame, route = Mock(), Mock(), Mock()
+        page.main_frame=frame;frame.page=page;route.request.frame=frame
+        self.b._bound_pages[page]='page:owned'
+        self.b._page_sessions['page:owned']=Mock()
+        self.b.cancelled.set()
+        self.b._ownership_route(route)
+        route.abort.assert_called_once_with('blockedbyclient')
+        route.continue_.assert_not_called()

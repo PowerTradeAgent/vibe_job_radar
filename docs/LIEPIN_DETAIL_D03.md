@@ -46,3 +46,9 @@
 同时修复原生后端中同一未支持弹窗被浏览器根会话、父会话和页面事件重复同步关闭的竞争：由目标守卫去重关闭；页面事件只停止任务并记录待清理页面，不在window.open事件内再次同步close。页面未获准的控制结果不变，不开放弹窗/验证码或未知操作。Windows有界面此前在negative-popup停住的原始记录保留；必须在本次实际提交的四组原生CI复核，不能只凭本地单测宣布修复。
 
 回归新增查询精确匹配、重复参数/改变过滤条件、取消与异常竞争、超时、自动接续现有报告，以及弹窗关闭去重和资源上限。现有浏览器验收保留默认人工返回流程，另用独立合成任务验证勾选后无需Capture/Resume点击；所有数据仍为明确标识的人工页面，不是猎聘实站认证。
+
+### 首请求边界的实测修正
+
+中途e7d246b的Windows反例证明：仅暂停目标并延后关闭，不能保证弹窗首个网络请求不发出；该候选未获合并认可，失败原样保留。修正增加在任何页面创建前安装的BrowserContext请求归属门：尚未绑定本应用CDP控制的页面、子frame或取消后的请求直接abort；已绑定主页面仅无参数continue，浏览器仍处理原HTTP/TLS/Cookie/压缩，没有fetch/fulfill和Python重发。原生CDP继续逐跳业务/配额控制，跨源preflight仍不属于当前支持契约。不得把这项归属门描述为完全不使用Playwright route；它不是原HTTP响应桥。
+
+目标事件只负责停止和记录清理，实际关闭在所属工作循环执行，避免window.open同步回调死锁。首请求拦截和关闭是两层不同职责；真实浏览器仍必须证明所有/apply反例零请求及正常业务链通过，不能通过删除该断言获得绿灯。官方接口依据：https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route 与 https://playwright.dev/python/docs/api/class-route#route-continue。

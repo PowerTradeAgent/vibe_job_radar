@@ -1,8 +1,9 @@
 """Opt-in Chromium native HTTP/TLS with a public-target opaque CONNECT guard.
 
-CDP Fetch observes/authorizes *each* hop. Playwright Route alone intentionally
-skips redirected requests and can synthesize preflight responses; this backend
-therefore does not install a Playwright HTTP route, fetch or fulfill handler.
+CDP Fetch observes/authorizes each owned-page hop. A context route rejects
+unowned pages before their initial request (a page event can arrive too late).
+Owned traffic continues unchanged; no route.fetch/fulfill or HTTP replay is used.
+Cross-origin preflights remain outside the supported site contracts.
 Only application-owned browser targets are used. Worker/OOPIF targets are stopped
 before running until their complete request accounting is separately supported.
 """
@@ -90,6 +91,9 @@ class NativeBackend(PlaywrightBackend):
                 'args': [*options['args'], '--proxy-bypass-list=<-loopback>', '--block-new-web-contents']}
 
     def _configure_context(self):
+        # Install before any page is created. Target debugger pause does not
+        # alone prevent the browser's initial popup network request.
+        self.context.route('**/*', self._ownership_route)
         self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._page_created)
         self._cdp = self.browser.new_browser_cdp_session()
@@ -104,6 +108,31 @@ class NativeBackend(PlaywrightBackend):
         # no Playwright private internals or remote-debugging TCP port.
         self._cdp.send('Target.setAutoAttach', {'autoAttach':True,
             'waitForDebuggerOnStart':True, 'flatten':True})
+
+    def _ownership_route(self, route):
+        """Only admit requests whose main page already has our CDP controls.
+
+        This is an early ownership gate, not a transport: the browser retains
+        original headers, TLS, cookies, method and body. Site operations and
+        redirects still require the independent native controller's approval.
+        """
+        try:
+            frame = route.request.frame
+            page = frame.page
+            session = self._bound_pages.get(page)
+            owned = (session in self._page_sessions and frame == page.main_frame)
+            allowed = (owned and not self._closing and not self._halted
+                       and not self.cancelled.is_set())
+        except Exception:
+            allowed = owned = False
+        if not allowed:
+            if not owned:
+                self.cancelled.set()
+                self._fatal('native_surface_unsupported')
+            route.abort('blockedbyclient')
+            return
+        # No parameter overrides, fetch, response reconstruction or retries.
+        route.continue_()
 
     def _page_created(self, page):
         # Never synchronously close a popup from its creation event. Chromium
@@ -120,10 +149,10 @@ class NativeBackend(PlaywrightBackend):
                 pending.append(page)
 
     def _reject_target(self, target):
-        # Unknown targets remain paused by waitForDebuggerOnStart. Do not call
-        # closeTarget inside attachedToTarget: closing during window creation
-        # can deadlock the opener's synchronous browser call. Never resume an
-        # unsupported target; stop outbound work and close on the owner loop.
+        # Do not call closeTarget inside attachedToTarget: closing during
+        # window creation can deadlock the opener's synchronous browser call.
+        # Our code never resumes an unsupported target. The context ownership
+        # route blocks its initial HTTP independently of debugger pause state.
         rejected = self.__dict__.setdefault('_rejected_targets', set())
         self.cancelled.set()
         self._fatal('native_surface_unsupported')
@@ -135,8 +164,8 @@ class NativeBackend(PlaywrightBackend):
         self.__dict__.setdefault('_pending_rejected_targets', []).append(target)
 
     def _drain_rejected_pages(self):
-        # Called outside target/page events. Paused targets have never had
-        # Runtime.runIfWaitingForDebugger or Fetch.continueRequest sent to them.
+        # Called outside target/page events. Our controller sends no resume
+        # or request-continuation commands to these unowned targets.
         targets = self.__dict__.setdefault('_pending_rejected_targets', [])
         while targets:
             target = targets.pop(0)
