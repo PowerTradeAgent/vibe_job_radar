@@ -35,6 +35,7 @@ class DOMAdapter:
     password_selectors: tuple[str, ...] = ('input[type="password"]',)
     submit_selectors: tuple[str, ...] = ('button[type="submit"]', 'button:has-text("登录")',
                                          'input[type="submit"]')
+    login_entry_selectors: tuple[str, ...] = ('a:has-text("登录")', 'button:has-text("登录")')
     next_selectors: tuple[str, ...] = ('a[rel="next"]', 'button.btn-next',
                                       'a[ka="page-next"]', 'button:has-text("下一页")',
                                       'a:has-text("下一页")')
