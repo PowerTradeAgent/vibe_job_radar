@@ -1,7 +1,7 @@
 """Explicit local-only native Chromium/Edge acceptance; no recruiting requests.
 
 A fresh test CA is trusted only in an isolated Linux HOME, or temporarily in a
-Windows CI runner's user store (removed in finally). This is a developer test,
+Windows ephemeral CI runner's machine store (removed in finally). This is a developer test,
 not production certificate installation or ignore_https_errors. DNS/TCP mapping
 exists only in unittest.mock for this local artificial source.
 """
@@ -65,18 +65,19 @@ def trust_fixture(root):
     leaf(HOST,root/'good.pem');leaf('wrong.fixture.test',root/'wrong.pem')
     fingerprint=ca.fingerprint(hashes.SHA1()).hex()
     if sys.platform=='win32':
-        if not os.environ.get('CI'):
-            raise RuntimeError('Windows test trust is restricted to an explicit CI runner')
+        if not os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS') != 'true':
+            raise RuntimeError('Windows fixture trust is restricted to an explicit GitHub CI runner')
         # Use the Windows tool explicitly, not an NSS namesake on PATH. The
-        # fixture is already explicitly enabled on an ephemeral CI runner. -f
-        # prevents an interactive root-import confirmation from hanging CI.
+        # fixture is explicitly enabled on an ephemeral CI runner. The machine
+        # store avoids an interactive user-root consent dialog in a headless
+        # runner. Only our fresh random CA is added, then removed in finally.
         tool=str(Path(os.environ['SystemRoot'])/'System32'/'certutil.exe')
         try:
-            subprocess.run([tool,'-f','-user','-addstore','Root',str(ca_path)],
+            subprocess.run([tool,'-f','-addstore','Root',str(ca_path)],
                 check=True,capture_output=True,stdin=subprocess.DEVNULL,timeout=30)
             yield
         finally:
-            subprocess.run([tool,'-user','-delstore','Root',fingerprint],
+            subprocess.run([tool,'-delstore','Root',fingerprint],
                 check=True,capture_output=True,stdin=subprocess.DEVNULL,timeout=30)
     elif sys.platform.startswith('linux'):
         home=root/'isolated-home';db=home/'.pki/nssdb';db.mkdir(parents=True)
@@ -284,6 +285,7 @@ def main():
                     b.close();backends.remove(b)
                     result['checks'].append('browser itself rejects wrong-host certificate before any HTTP; no ignore_https_errors')
                     result['requests']=good.requests
+                    assert all(r['agent_identified'] and r['proxy_secret_absent'] for r in good.requests), 'all redirects and operations must preserve application identity without proxy secrets'
                     assert all(host==HOST for host in good.sni+bad.sni)
                     result['success']=True
                     checkpoint('passed')

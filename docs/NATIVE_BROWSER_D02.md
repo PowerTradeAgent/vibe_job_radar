@@ -83,7 +83,7 @@ CDN、跨源跳转、需要后台worker的页面仍可能停止，并需逐项�
 - `python scripts/run_native_browser_acceptance.py`：默认零请求，仅显示使用说明。
 - 开发者显式 `--controlled`：应用实际后端、CONNECT、人工TLS上游、业务POST、
   HttpOnly Cookie、gzip、原报告；并验证重定向/禁止写操作/403/429/错误主机证书。
-- Linux使用临时HOME/NSS测试CA；Windows仅CI环境临时加入随机测试CA并finally清除。
+- Linux使用临时HOME/NSS测试CA；Windows仅GitHub CI环境临时在机器信任库加入随机测试CA并finally清除。
   这些是隔离人工上游测试工具，绝不作为产品的证书修复方案。
 - 现有全部CI保留，新增独立Linux Chromium/Windows Edge原生验收；产物包含失败结果。
 

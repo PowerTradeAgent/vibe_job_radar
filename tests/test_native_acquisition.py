@@ -173,6 +173,14 @@ class NativeControllerTests(unittest.TestCase):
                 'request':{'url':URL+path,'method':method,'postData':SECRET},**extra}
     def response(self,status=200,headers=None,**kw):
         event=self.req(**kw);event.update(responseStatusCode=status,responseHeaders=[{'name':k,'value':v} for k,v in (headers or {}).items()]);return event
+    def test_owned_target_installs_actual_identified_agent_before_running(self):
+        self.b._native_user_agent='ActualBrowser/1.0 VibeJobRadar/0.1'
+        self.b._install_target('new-session', {'targetId':'new-target'})
+        calls=self.b._send.call_args_list
+        override=[c for c in calls if c.args[1]=='Network.setUserAgentOverride']
+        self.assertEqual(override[0].args[2],{'userAgent':self.b._native_user_agent})
+        self.assertLess(calls.index(override[0]),next(i for i,c in enumerate(calls) if c.args[1]=='Runtime.runIfWaitingForDebugger'))
+
     def test_native_request_not_replayed(self):
         self.b._paused('session',self.req())
         self.b._send.assert_called_with('session','Fetch.continueRequest',{'requestId':'fetch-1'})

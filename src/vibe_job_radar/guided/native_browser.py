@@ -76,9 +76,6 @@ class NativeBackend(PlaywrightBackend):
                               'blocked':0, 'responses':0}
         super().__init__(adapter, ledger, cancelled, progress, headless=headless,
             executable_path=executable_path, channel=channel, transport_factory=NativeControl)
-        # Native Chromium chooses its actual UA; add only the application token.
-        user_agent = self.page.evaluate('navigator.userAgent')
-        self.context.set_extra_http_headers({'User-Agent': user_agent + ' ' + USER_AGENT})
         self.startup_report['network_backend'] = 'native'
 
     def _launch_options(self, options):
@@ -90,6 +87,10 @@ class NativeBackend(PlaywrightBackend):
         self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._bind_page)
         self._cdp = self.browser.new_browser_cdp_session()
+        # A context extra-header UA can be dropped on native redirects. Set
+        # the actual browser-reported UA plus our token on every owned target
+        # before it runs; never rotate or impersonate another browser.
+        self._native_user_agent = self._cdp.send('Browser.getVersion')['userAgent'] + ' ' + USER_AGENT
         self._cdp.on('Target.attachedToTarget', self._attached)
         self._cdp.on('Target.receivedMessageFromTarget', self._received)
         self._cdp.on('Target.detachedFromTarget', self._detached)
@@ -144,6 +145,7 @@ class NativeBackend(PlaywrightBackend):
         self._sessions[session] = info['targetId']
         try:
             self._send(session, 'Network.enable', {'maxTotalBufferSize':5_000_000,'maxResourceBufferSize':1_000_000})
+            self._send(session, 'Network.setUserAgentOverride', {'userAgent':self._native_user_agent})
             self._send(session, 'Network.setCacheDisabled', {'cacheDisabled':True})
             self._send(session, 'Fetch.enable', {'patterns':[
                 {'urlPattern':'*','requestStage':'Request'},
