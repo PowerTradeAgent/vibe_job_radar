@@ -8,8 +8,9 @@ exists only in unittest.mock for this local artificial source.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
+import faulthandler
 import gzip
 import http.server
 import json
@@ -75,7 +76,10 @@ def trust_fixture(root):
         if not tool:raise RuntimeError('developer NSS certutil is required for isolated test trust')
         subprocess.run([tool,'-N','-d','sql:'+str(db),'--empty-password'],check=True,capture_output=True)
         subprocess.run([tool,'-A','-d','sql:'+str(db),'-n','radar-ephemeral-fixture','-t','C,,','-i',str(ca_path)],check=True,capture_output=True)
-        with patch.dict(os.environ,{'HOME':str(home)}):yield
+        # Isolate browser trust without moving Playwright's installed binaries.
+        cache=os.environ.get('PLAYWRIGHT_BROWSERS_PATH') or str(
+            Path(os.environ.get('XDG_CACHE_HOME',str(Path.home()/'.cache')))/'ms-playwright')
+        with patch.dict(os.environ,{'HOME':str(home),'PLAYWRIGHT_BROWSERS_PATH':cache}):yield
     else:
         raise RuntimeError('this native trust harness covers Linux/Windows only')
 
@@ -126,10 +130,18 @@ class Fixture:
                     self.send(json.dumps({'jobs':[{'id':'1','url':'/job/1','title':'时间序列算法工程师'}],'has_more':False},ensure_ascii=False),'application/json',compressed=True)
                 elif self.path=='/login':self.send('<h1>人工登录完成</h1>',extra=[('Set-Cookie','login_fixture=valid; Secure; HttpOnly')])
                 else:self.send('unexpected write',status=405)
-        self.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);self.server.daemon_threads=True
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(str(root/certificate))
         context.set_servername_callback(lambda sock,host,ctx:self.sni.append(host))
-        self.server.socket=context.wrap_socket(self.server.socket,server_side=True)
+        class Server(http.server.ThreadingHTTPServer):
+            daemon_threads=True
+            def get_request(self):
+                # Browser speculative CONNECTs must not block fixture cleanup
+                # indefinitely while the server waits for a TLS ClientHello.
+                sock,address=super().get_request();sock.settimeout(5)
+                try:return context.wrap_socket(sock,server_side=True),address
+                except Exception:
+                    sock.close();raise
+        self.server=Server(('127.0.0.1',0),Handler)
         self.thread=threading.Thread(target=self.server.serve_forever,kwargs={'poll_interval':.05},daemon=True);self.thread.start()
     def close(self):self.server.shutdown();self.server.server_close();self.thread.join(timeout=2)
 
@@ -142,8 +154,23 @@ def main():
     out=ROOT/'browser-acceptance/native';out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'scope':'Artificial local TLS source; native browser, real production controller/tunnel/service. Not live-site/VPN certification.','checks':[]}
     services=[];backends=[];fixtures=[]
+    def checkpoint(stage):
+        result['stage']=stage
+        (out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+        print('Native fixture stage: '+stage,flush=True)
+    def cleanup_resources():
+        for service in services:service.close()
+        services.clear()
+        for b in backends:
+            try:b.close()
+            except Exception:pass
+        backends.clear()
+        for f in fixtures:f.close()
+        fixtures.clear()
+    faulthandler.dump_traceback_later(75,repeat=True)
     try:
-        with tempfile.TemporaryDirectory(prefix='vjr-native-fixture-') as d:
+        with tempfile.TemporaryDirectory(prefix='vjr-native-fixture-') as d, ExitStack() as cleanup:
+            cleanup.callback(cleanup_resources)
             root=Path(d)
             with trust_fixture(root):
                 good=Fixture(root,'good.pem');bad=Fixture(root,'wrong.pem');fixtures.extend([good,bad])
@@ -189,6 +216,7 @@ def main():
                     services.append(service)
                     query={'platform':'fixture','keyword':'时间序列算法工程师','roles':['time_series'],'max_pages':1,'max_jobs':1,
                            'consent':True,'rights_note':'人工上游测试','diagnostics':True,'backend':'native','native_consent':True}
+                    checkpoint('service-search')
                     service.create(query);task=wait(service)
                     if task['status'] != 'ready':
                         result['fixture_requests'] = good.requests
@@ -196,6 +224,7 @@ def main():
                         result['initial_diagnostic'] = service.diagnostics({'id':task['id']})
                         result['native_error'] = backends[-1].error if backends else None
                         result['tunnel_error'] = backends[-1].tunnel.last_error if backends and backends[-1].tunnel else None
+                    checkpoint('service-search-returned')
                     assert task['status']=='ready', {'code':task['code'],'message':task['message']}
                     assert len(task['cards'])==1
                     b=backends[-1]
@@ -205,6 +234,7 @@ def main():
                     assert any(r['path']=='/api/jobs' and r['method']=='POST' and r['cookie_ok'] and r['body_intact'] for r in good.requests)
                     assert all(r['proxy_secret_absent'] and r['agent_identified'] for r in good.requests)
                     result['checks'].append('GuidedService selected native; real browser POST, HttpOnly cookie, gzip JS/CSS/JSON and list rendering reached source without HTTP replay')
+                    checkpoint('service-collect')
                     service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]});task=wait(service)
                     assert task['status']=='completed' and task['outcome']['saved']==1,task.get('code')
                     report=workspace.report(task['report_id']);assert report['manifest']['stats']['full_text_job_groups']==1
@@ -213,18 +243,21 @@ def main():
                     (out/'diagnostic.json').write_text(json.dumps(diagnostic,ensure_ascii=False,indent=2),encoding='utf-8')
                     result['checks'].append('same batch detail persisted and existing report generated; opt-in trace has no query/body/cookie secret')
                     service.close();services.remove(service)
+                    checkpoint('native-redirect')
                     b=backend('redirect');b.open(URL+'/redirect');assert b.page.url==URL+'/search'
                     assert b.native_counts['document']==2
                     assert b.page.locator('#jobs').evaluate("el=>getComputedStyle(el).getPropertyValue('--native-fixture').trim()")=='yes'
                     b.page.screenshot(path=str(out/'native-rendered.png'))
                     result['checks'].append('same-origin 302 remains browser-native; both document hops counted; gzip stylesheet computed style verified')
                     b.close();backends.remove(b)
+                    checkpoint('native-login')
                     b=backend('login');b.open(URL+'/login',authentication=True);b.page.get_by_role('button',name='人工确认').click();b.page.wait_for_timeout(100)
                     assert not b.error,b.error
                     assert any(r['path']=='/login' and r['method']=='POST' for r in good.requests)
                     result['checks'].append('reviewed native login POST executes only in explicit authentication mode')
                     b.close();backends.remove(b)
                     for name,path,expected in [('cross','/cross','redirect_requires_attention'),('unknown','/unknown','native_operation_unreviewed'),('denied','/denied','http_403'),('limited','/limited','http_429')]:
+                        checkpoint('negative-'+name)
                         b=backend(name)
                         try:b.open(URL+path)
                         except Exception as exc:
@@ -232,6 +265,7 @@ def main():
                         else:raise AssertionError(name+' was not stopped')
                         b.close();backends.remove(b);result['checks'].append(name+' stops with '+expected)
                     assert not any(r['path']=='/apply' for r in good.requests)
+                    checkpoint('negative-certificate')
                     destination[0]=bad.server.server_address
                     b=backend('bad-cert')
                     try:b.open(URL+'/search')
@@ -244,16 +278,14 @@ def main():
                     result['requests']=good.requests
                     assert all(host==HOST for host in good.sni+bad.sni)
                     result['success']=True
+                    checkpoint('passed')
     except Exception as exc:
         # Artificial test data only; production trace never prints exceptions.
         result['error_type']=type(exc).__name__;result['error']=str(exc)[:1500]
         raise
     finally:
-        for service in services:service.close()
-        for b in backends:
-            try:b.close()
-            except Exception:pass
-        for f in fixtures:f.close()
+        cleanup_resources()
+        faulthandler.cancel_dump_traceback_later()
         (out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
         print(json.dumps(result,ensure_ascii=True))
 
