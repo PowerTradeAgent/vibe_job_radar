@@ -234,8 +234,12 @@ class DetailReturnServiceTests(unittest.TestCase):
     def await_state(self,key,value):
         end=time.monotonic()+5
         while time.monotonic()<end:
-            state=self.service._load(self.ident)
-            if state.get(key)==value and not self.service.state()['busy']:return state
+            # One locked view: reading JSON before a separate busy check can
+            # return the prior completed/manual_pending snapshot while the
+            # worker finishes its final user_resumed save in between.
+            view=self.service.state()
+            state=next(j for j in view['jobs'] if j['id']==self.ident)
+            if state.get(key)==value and not view['busy']:return state
             time.sleep(.01)
         self.fail(f'expected {key}={value}; got {self.service._load(self.ident)}')
     def login(self):

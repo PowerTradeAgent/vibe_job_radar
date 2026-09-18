@@ -110,7 +110,17 @@ def main():
                         assert ('GET','/') not in calls
                         human_click.set()
                         expect(page.locator('#task-status')).to_contain_text('本批次已结束',timeout=30000)
-                        finished=server.guided.state()['jobs'][0]
+                        # Completed can render while the worker is saving its
+                        # final continuation metadata. Wait for one coherent
+                        # idle view, then assert every final field unchanged.
+                        end=time.monotonic()+30
+                        while time.monotonic()<end:
+                            view=server.guided.state()
+                            if not view['busy']:
+                                finished=view['jobs'][0]
+                                break
+                            page.wait_for_timeout(50)
+                        else:raise AssertionError('returned-detail worker did not finish')
                         assert all(r['status']=='ok' for r in finished['cards'])
                         assert finished['cards'][0]['record_id']==first_record
                         assert finished['cards'][1]['acquisition_path']=='login_returned_detail'
