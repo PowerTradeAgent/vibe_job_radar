@@ -30,10 +30,10 @@ jobs:
           sudo apt-get install -y libnss3-tools
       - name: Verify native Chromium with artificial local TLS source
         if: runner.os == 'Linux'
-        run: python scripts/run_native_browser_acceptance.py --controlled
+        run: python scripts/run_native_auth_probe.py --controlled
       - name: Verify installed Edge with artificial local TLS source
         if: runner.os == 'Windows'
-        run: python scripts/run_native_browser_acceptance.py --controlled --channel msedge
+        run: python scripts/run_native_auth_probe.py --controlled --channel msedge
       - name: Preserve native evidence including failures
         if: always()
         uses: actions/upload-artifact@v4

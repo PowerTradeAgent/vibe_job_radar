@@ -1,0 +1,112 @@
+"""Metadata-only wrapper around the unchanged local native acceptance suite.
+
+No target URLs, headers, credentials, bodies or protocol error text are recorded.
+This developer-only probe changes neither authentication nor request decisions.
+"""
+from __future__ import annotations
+
+from collections import Counter
+import json
+from pathlib import Path
+from urllib.parse import urlsplit
+from unittest.mock import patch
+
+import run_native_browser_acceptance as acceptance
+from vibe_job_radar.guided.native_tunnel import NativeTunnel
+
+COMMANDS = frozenset({
+    'Network.enable', 'Network.setUserAgentOverride', 'Network.setCacheDisabled',
+    'Fetch.enable', 'Fetch.continueRequest', 'Fetch.continueResponse',
+    'Fetch.continueWithAuth', 'Fetch.failRequest', 'Runtime.runIfWaitingForDebugger',
+    'Target.setAutoAttach', 'Network.getResponseBody', 'Page.stopLoading',
+})
+EVENTS = frozenset({
+    'Fetch.authRequired', 'Fetch.requestPaused', 'Network.loadingFailed',
+    'Network.loadingFinished', 'Target.attachedToTarget',
+})
+PROBES = []
+REPLIES = Counter()
+
+
+class ObservedBackend(acceptance.NativeBackend):
+    def __init__(self, *args, **kwargs):
+        self.probe = {'sent': Counter(), 'acknowledged': Counter(), 'events': Counter(),
+                      'attachments': Counter(), 'auth': Counter(), 'snapshots': []}
+        PROBES.append(self.probe)
+        super().__init__(*args, **kwargs)
+
+    def _attached(self, event):
+        kind = event.get('targetInfo', {}).get('type')
+        self.probe['attachments'][kind if kind in {'page', 'worker', 'iframe'} else 'other'] += 1
+        return super()._attached(event)
+
+    def _send(self, session, method, params=None, callback=None):
+        key = method if method in COMMANDS else 'other'
+        self.probe['sent'][key] += 1
+        def acknowledged(result):
+            self.probe['acknowledged'][key] += 1
+            if callback:
+                callback(result)
+        return super()._send(session, method, params, acknowledged)
+
+    def _received(self, event):
+        try:
+            message = json.loads(event['message'])
+            method = message.get('method')
+            if method in EVENTS:
+                self.probe['events'][method] += 1
+            if 'error' in message:
+                self.probe['events']['command_error'] += 1
+        except (KeyError, TypeError, ValueError):
+            self.probe['events']['unreadable'] += 1
+        return super()._received(event)
+
+    def _authenticate(self, session, event):
+        challenge = event.get('authChallenge', {})
+        source = challenge.get('source')
+        self.probe['auth'][source if source in {'Proxy', 'Server'} else 'unknown_source'] += 1
+        try:
+            origin = urlsplit(challenge.get('origin', ''))
+            expected = urlsplit(self.tunnel.endpoint)
+            matches = (origin.scheme, origin.hostname, origin.port) == (
+                expected.scheme, expected.hostname, expected.port)
+        except (AttributeError, TypeError, ValueError):
+            matches = False
+        self.probe['auth']['same_origin' if matches else 'different_origin'] += 1
+        return super()._authenticate(session, event)
+
+    def _load_robots(self):
+        try:
+            return super()._load_robots()
+        finally:
+            if len(self.probe['snapshots']) < 8:
+                self.probe['snapshots'].append({
+                    'owned_sessions': len(self._sessions),
+                    'pending_commands': len(self._pending),
+                    'active_requests': len(self._requests),
+                    'auth_attempts': len(self._auth_attempts),
+                    'native_counts': dict(self.native_counts),
+                    'tunnel_connections': self.tunnel.connections if self.tunnel else 0,
+                })
+
+
+def main():
+    reply = NativeTunnel._reply
+    def counted_reply(sock, status):
+        REPLIES[str(status) if status in {400, 403, 407, 502, 503} else 'other'] += 1
+        return reply(sock, status)
+    try:
+        with patch.object(acceptance, 'NativeBackend', ObservedBackend), \
+                patch.object(NativeTunnel, '_reply', staticmethod(counted_reply)):
+            acceptance.main()
+    finally:
+        out = acceptance.ROOT / 'browser-acceptance' / 'native'
+        out.mkdir(parents=True, exist_ok=True)
+        (out / 'auth-probe.json').write_text(json.dumps({
+            'scope': 'Controlled fixture only; passive fixed counters, no traffic decisions changed.',
+            'proxy_replies': dict(REPLIES), 'backends': PROBES,
+        }, indent=2), encoding='utf-8')
+
+
+if __name__ == '__main__':
+    main()
