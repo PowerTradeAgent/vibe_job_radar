@@ -49,7 +49,10 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     local_socks_connection_failed local_socks_request_rejected local_socks_truncated_reply
     robots_response_html robots_http_unavailable robots_encoding_invalid
     robots_rules_observed robots_extensions_observed robots_no_rules_observed
-    robots_inspection_truncated no_cards no_records'''.split())
+    robots_inspection_truncated no_cards no_records native_administrator_blocked native_contract_unavailable
+    native_contract_invalid native_operation_unreviewed native_surface_unsupported
+    native_protocol_error native_proxy_auth_failed native_policy_changed native_observation_limit
+    native_unaccounted_response native_business_response_invalid'''.split())
 WAITS = frozenset({'paused', 'rate_wait', 'publisher_wait', 'cooldown', 'http_429',
     'hourly_limit', 'daily_limit', 'login_rate_limited'})
 LOCAL_POLICIES = {
@@ -61,7 +64,9 @@ LOCAL_POLICIES = {
     'redirect_requires_attention': 'redirect_policy', 'unexpected_compression': 'identity_encoding',
     'response_too_large': 'response_size', 'request_too_large': 'request_size',
     'request_headers_invalid': 'header_validation', 'request_headers_conflict': 'header_validation',
-    'paused': 'cancellation',
+    'paused': 'cancellation', 'native_operation_unreviewed': 'native_site_contract',
+    'native_surface_unsupported': 'native_surface_policy', 'native_policy_changed': 'workspace_policy',
+    'native_observation_limit': 'native_response_limit',
 }
 # Only fixed path components/query NAMES survive; unknown segments and names
 # might themselves contain a credential. Values/fragments/userinfo never survive.
@@ -101,7 +106,8 @@ def runtime_metadata():
     except importlib.metadata.PackageNotFoundError:
         version = None
     hashes = {}
-    for name in ('diagnostic_trace.py', 'browser.py', 'transport.py', 'service.py'):
+    for name in ('diagnostic_trace.py', 'browser.py', 'transport.py', 'service.py',
+                 'native_browser.py', 'native_policy.py', 'native_tunnel.py'):
         try:
             hashes[name] = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         except OSError:

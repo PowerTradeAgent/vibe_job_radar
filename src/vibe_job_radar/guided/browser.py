@@ -93,15 +93,13 @@ class PlaywrightBackend:
             if channel:
                 options['channel'] = channel
             self.startup_report.update(stage='launch', launch_tested=True)
-            self.browser = self.runtime.chromium.launch(**options)
+            self.browser = self.runtime.chromium.launch(**self._launch_options(options))
             self.startup_report.update(stage='context', executable_exists=True)
             if channel:
                 self.startup_report['browser_version'] = self.browser.version
             self.context = self.browser.new_context(service_workers='block', accept_downloads=False)
-            self.context.route('**/*', self._route)
-            self.context.route_web_socket('**/*', lambda ws: ws.close())
-            self.context.on('page', self._bind_page)
-            self.page = self.context.new_page()
+            self._configure_context()
+            self.page = self._new_page()
             self.page.set_default_timeout(6000)
             self.startup_report.update(stage='ready', code='browser_ready', ready=True,
                 message=HEALTH_MESSAGES['browser_ready'])
@@ -109,6 +107,17 @@ class PlaywrightBackend:
             report = exc.report if isinstance(exc, BrowserStartupError) else failed_report(self.startup_report, exc)
             self.close()
             raise BrowserStartupError(report) from exc
+
+    def _new_page(self):
+        return self.context.new_page()
+
+    def _launch_options(self, options):
+        return options
+
+    def _configure_context(self):
+        self.context.route('**/*', self._route)
+        self.context.route_web_socket('**/*', lambda ws: ws.close())
+        self.context.on('page', self._bind_page)
 
     def _bind_page(self, page):
         page.on('download', lambda download: download.cancel())

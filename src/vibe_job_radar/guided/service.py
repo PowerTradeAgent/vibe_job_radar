@@ -28,6 +28,9 @@ from ..utils import atomic_json, utc_now
 from ..workspace import InputError, text_field
 from .adapters import Registry, builtins
 from .browser import PlaywrightBackend
+from .native_browser import NativeBackend
+from .native_policy import capability as native_capability, contract_for
+from ..network_policy import current_policy
 from .contracts import CrawlError
 from .rate import RateLedger, RateLimit
 from .transport import diagnose_host
@@ -106,15 +109,32 @@ MESSAGES.update({
 })
 
 
+MESSAGES.update({
+    'native_administrator_blocked': '浏览器管理策略阻止了本次访问，未改变系统保护或切换路线。',
+    'native_contract_unavailable': '该平台的原生采集契约尚未建立；未自动改用其他模式。',
+    'native_contract_invalid': '原生站点契约无效，未开始联网。',
+    'native_operation_unreviewed': '页面需要尚未核实的业务请求或依赖。请预览脱敏诊断；不是搜索结果为空，需继续维护站点适配。',
+    'native_surface_unsupported': '当前原生实验暂不支持此框架或后台执行面，已停止该请求。',
+    'native_protocol_error': '浏览器原生拦截协议未完成，已停止；未回退至其他后端。',
+    'native_proxy_auth_failed': '应用专用本机连接校验失败；没有使用账号密码或绕过所选代理。',
+    'native_policy_changed': '网络偏好已变更，原生会话已停止。请明确继续以建立使用新偏好的会话；配额保持。',
+    'native_observation_limit': '原生业务响应或观察队列超过上限，已保留已有结果并停止。',
+    'native_unaccounted_response': '出现无法关联到已计量请求的响应，已停止原生会话。',
+    'native_business_response_invalid': '已收到业务响应，但内容不是有效的结构化岗位数据。',
+})
+
+
 class GuidedService:
     def __init__(self, workspace, *, registry: Registry | None = None, backend_factory=PlaywrightBackend,
-                 ledger: RateLedger | None = None, health_probe=probe_browser, installer=run_command):
+                 ledger: RateLedger | None = None, health_probe=probe_browser, installer=run_command,
+                 native_backend_factory=NativeBackend):
         self.workspace = workspace
         self.root = workspace.root / 'guided'
         self.root.mkdir(exist_ok=True, mode=0o700)
         if self.root.is_symlink():
             raise InputError('向导目录不能使用符号链接。')
         self.registry, self.factory = registry or builtins(), backend_factory
+        self.native_factory = native_backend_factory
         self.ledger = ledger or RateLedger(self.root / 'rates.sqlite')
         self._lock = threading.RLock()
         self._queue = queue.Queue(maxsize=1)
@@ -196,9 +216,14 @@ class GuidedService:
                 item['automatic_resume_available'] = (item.get('auto_resume', False)
                                                       and item['browser_open']
                                                       and item['status'] == 'waiting_rate')
+                item['backend'] = item.get('backend', 'bridge')
+                backend = self._backends.get(item['id'])
+                if item['backend'] == 'native' and backend is not None:
+                    item['native_requests'] = dict(getattr(backend, 'native_counts', {}))
                 jobs.append(item)
             return {'jobs': jobs, 'busy': self._busy, 'active': self._active,
-                    'sites': self.registry.describe(), 'limits': asdict(self.ledger.limits),
+                    'sites': [{**site, 'native': native_capability(self.registry.get(site['key']))}
+                              for site in self.registry.describe()], 'limits': asdict(self.ledger.limits),
                     'browser_package': self._package(), 'installation': self._last_install,
                     'installation_scope': 'current_process_actions_only_not_component_readiness',
                     'tls_environment': {**tls_context.status(), 'restart_required': self._tls_restart_required},
@@ -220,6 +245,16 @@ class GuidedService:
         adapter = self.registry.get(data.get('platform'))
         if type(data.get('diagnostics', False)) is not bool:
             raise InputError('诊断选项必须为布尔值。')
+        mode = data.get('backend', 'bridge')
+        if not isinstance(mode, str) or mode not in {'bridge', 'native'}:
+            raise InputError('请选择已有桥接模式或原生实验模式。')
+        if mode == 'native':
+            if data.get('native_consent') is not True:
+                raise InputError('启用原生实验模式前请阅读并确认范围；不会自动换路线。')
+            try:
+                contract_for(adapter)
+            except CrawlError:
+                raise InputError('该平台尚无原生访问契约；不能将其他平台配置当作已支持。') from None
         keyword = text_field(data, 'keyword', required=True, limit=100).strip()
         roles = data.get('roles', ['time_series'])
         if not isinstance(roles, list) or not roles or any(not isinstance(r,str) or r not in self.workspace.config['roles'] for r in roles):
@@ -239,7 +274,7 @@ class GuidedService:
                  'status': 'queued', 'code': 'new', 'cards': [], 'pages_seen': [], 'report_id': '',
                  'phase': 'search', 'selection': [], 'created_at': utc_now(), 'updated_at': utc_now(),
                  'authentication': 'not_checked', 'certification': 'not_live_verified',
-                 'diagnostics_enabled': data.get('diagnostics', False)}
+                 'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode}
         with self._lock:
             if self._busy:
                 raise InputError('已有任务运行，请先暂停。')
@@ -252,6 +287,8 @@ class GuidedService:
         state = self._load(ident)
         if any(k in data for k in ('username','password','cookie','credential_consent')):
             raise InputError('本向导不接收账号密码；请在平台原生浏览器页面登录。')
+        if any(k in data for k in ('backend', 'native_consent', 'native_contract')):
+            raise InputError('任务后端不可中途更换；新任务仍共享原配额。')
         permitted = {'search', 'login', 'capture', 'more', 'collect', 'pause', 'stop', 'resume'}
         if action not in permitted:
             raise InputError('未知操作。')
@@ -504,6 +541,10 @@ class GuidedService:
                 ValueError('invalid saved browser selection'), code='browser_choice_invalid'))
         ident = state['id']
         previous = self._backends.get(ident)
+        native = state.get('backend', 'bridge') == 'native'
+        if native and previous and previous.wire.network_policy.fingerprint != current_policy().fingerprint:
+            self._backends.pop(ident).close()
+            raise CrawlError('native_policy_changed')
         if previous and hasattr(previous, 'alive') and not previous.alive():
             self._backends.pop(ident).close()
         if ident not in self._backends:
@@ -511,7 +552,8 @@ class GuidedService:
                 self._backends.pop(old).close()
             def progress(code, seconds):
                 self._save(state, code, wait_seconds=seconds)
-            self._backends[ident] = self.factory(self.registry.get(state['platform']), self.ledger, self._cancel, progress,
+            factory = self.native_factory if native else self.factory
+            self._backends[ident] = factory(self.registry.get(state['platform']), self.ledger, self._cancel, progress,
                 **({'channel': self._selected_browser} if self._selected_browser != 'bundled' else {}))
             health = getattr(self._backends[ident], 'startup_report', None)
             if health:
@@ -519,6 +561,8 @@ class GuidedService:
                     self._browser_health = dict(health)
                     self._remember_check(health, self._selected_browser)
         backend = self._backends[ident]
+        if native:
+            backend.policy_check = lambda: self.workspace.network_policy().fingerprint == backend.wire.network_policy.fingerprint
         bind = getattr(backend, 'bind_diagnostics', None)
         if callable(bind):
             try:
