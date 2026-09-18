@@ -207,8 +207,8 @@ def main():
                                 chain.append(type(e).__name__+': '+str(e));e=e.__cause__
                             result['fixture_failure_chain']=chain
                             raise
-                def factory(a,l,c,p):
-                    with use_policy(NetworkPolicy()):b=TestedBackend(a,l,c,p,**options)
+                def factory(a,l,c,p,**saved):
+                    with use_policy(NetworkPolicy()):b=TestedBackend(a,l,c,p,**options,**saved)
                     backends.append(b);return b
                 def backend(name):
                     return factory(adapter(),RateLedger(root/(name+'.sqlite'),Limits(page_interval=0,request_interval=0)),threading.Event(),lambda *_:None)
@@ -226,7 +226,7 @@ def main():
                         ledger=RateLedger(root/'service.sqlite',Limits(page_interval=0,request_interval=0)),native_backend_factory=factory)
                     services.append(service)
                     query={'platform':'fixture','keyword':'时间序列算法工程师','roles':['time_series'],'max_pages':1,'max_jobs':1,
-                           'consent':True,'rights_note':'人工上游测试','diagnostics':True,'backend':'native','native_consent':True}
+                           'consent':True,'rights_note':'人工上游测试','diagnostics':True,'backend':'native','native_consent':True,'persist_session':True}
                     checkpoint('service-search')
                     service.create(query);task=wait(service)
                     if task['status'] != 'ready':
@@ -253,6 +253,27 @@ def main():
                     assert diagnostic['observer_errors']==0
                     (out/'diagnostic.json').write_text(json.dumps(diagnostic,ensure_ascii=False,indent=2),encoding='utf-8')
                     result['checks'].append('same batch detail persisted and existing report generated; opt-in trace has no query/body/cookie secret')
+                    service.close();services.remove(service)
+                    checkpoint('native-session-restore')
+                    previous_report = task['report_id']
+                    initial_count = len(good.requests)
+                    service=GuidedService(workspace,registry=Registry([adapter()]),
+                        ledger=RateLedger(root/'service.sqlite',Limits(page_interval=0,request_interval=0)),native_backend_factory=factory)
+                    services.append(service)
+                    service.create(query); task=wait(service)
+                    assert task['status']=='ready' and task['authentication']=='restored_session_unverified',task.get('code')
+                    documents=[r for r in good.requests[initial_count:] if r['path']=='/search']
+                    assert documents and documents[0]['cookie_ok'], 'restored cookie missing on first native document'
+                    assert task['saved_session_status']=='saved_unverified'
+                    service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]});task=wait(service)
+                    assert task['status']=='completed' and task['outcome']['saved']==1
+                    assert workspace.report(previous_report)
+                    assert task['report_id'] != previous_report
+                    result['checks'].append('opt-in disk snapshot restored before first document in a fresh native browser/service; complete selected JD reaches a new report with old report retained')
+                    service.action({'id':task['id'],'action':'forget_session','confirm':True}); task=wait(service)
+                    assert task['saved_session_status']=='cleared'
+                    assert not (workspace.root/'.radar-sessions/fixture.json').exists()
+                    assert not service._backends and not service._session_leases
                     service.close();services.remove(service)
                     checkpoint('native-redirect')
                     b=backend('redirect');b.open(URL+'/redirect');assert b.page.url==URL+'/search'

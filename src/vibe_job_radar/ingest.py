@@ -36,8 +36,11 @@ def coerce(data: dict, source_ref: str, *, csv_mode: bool = False) -> JobRecord:
 def iter_items(path: str | Path):
     """Yield (source reference, raw record OR Exception); row errors do not hide valid rows."""
     path = Path(path)
+    if '.radar-sessions' in path.parts:
+        yield str(path), ValueError('private browser state is not a job input')
+        return
     paths = sorted(p for p in path.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED
-                   and not p.name.endswith(".meta.json")) if path.is_dir() else [path]
+                   and not p.name.endswith(".meta.json") and ".radar-sessions" not in p.parts) if path.is_dir() else [path]
     if not paths:
         yield str(path), ValueError("no supported input files")
     for file in paths:

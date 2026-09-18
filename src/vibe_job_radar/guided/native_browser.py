@@ -63,7 +63,7 @@ class NativeControl(PinnedTransport):
 
 class NativeBackend(PlaywrightBackend):
     def __init__(self, adapter, ledger, cancelled, progress=lambda *_: None, *,
-                 headless=False, executable_path=None, channel=None):
+                 headless=False, executable_path=None, channel=None, storage_state=None):
         self.contract = contract_for(adapter)
         self.tunnel = self._cdp = None
         self._sessions, self._pending, self._requests, self._hops = {}, {}, {}, {}
@@ -82,7 +82,8 @@ class NativeBackend(PlaywrightBackend):
         self.native_counts = {'document':0, 'business':0, 'asset':0, 'robots':0, 'login':0,
                               'blocked':0, 'responses':0}
         super().__init__(adapter, ledger, cancelled, progress, headless=headless,
-            executable_path=executable_path, channel=channel, transport_factory=NativeControl)
+            executable_path=executable_path, channel=channel, transport_factory=NativeControl,
+            storage_state=storage_state)
         self.startup_report['network_backend'] = 'native'
 
     def _launch_options(self, options):
