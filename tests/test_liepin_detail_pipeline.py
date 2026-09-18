@@ -123,9 +123,13 @@ class LiepinIdentityTests(unittest.TestCase):
         with self.assertRaises(CrawlError):
             self.adapter.detail(PageSnapshot(URL, '<link rel="canonical" href="https://evil.invalid/job/123.shtml">' + page_markup()))
 
-    def test_list_deduplicates_tracking_variants(self):
+    def test_tracking_variants_preserve_legacy_task_page_signatures(self):
         html = '<a href="/job/123.shtml?d_sfrom=a">时间序列</a><a href="/job/123.shtml?d_sfrom=b">时间序列</a>'
-        self.assertEqual(len(self.adapter.cards(PageSnapshot(SEARCH, html))), 1)
+        page = PageSnapshot(SEARCH, html)
+        cards = self.adapter.cards(page)
+        self.assertEqual(cards, DOMAdapter.cards(self.adapter, page))
+        self.assertEqual(len(cards), 2)
+        self.assertEqual(len({self.adapter.job_identity(c.url) for c in cards}), 1)
 
     def test_existing_task_card_ids_are_not_migrated(self):
         page = PageSnapshot(SEARCH, '<a href="/job/123.shtml?d_sfrom=a">时间序列</a>')

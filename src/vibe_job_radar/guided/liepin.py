@@ -128,16 +128,11 @@ class LiepinAdapter(DOMAdapter):
             if self.challenged('', page.url):
                 raise CrawlError('manual_required')
             raise CrawlError('not_job_list')
-        cards = {}
-        for item in super().cards(page):
-            try:
-                entity = self.job_identity(item.url)
-            except CrawlError:
-                continue
-            # Keep the established Card.id for persisted task selections.
-            # Entity deduplication must not silently migrate old task/page IDs.
-            cards.setdefault(entity, item)
-        return list(cards.values())
+        # Preserve the complete legacy card sequence and IDs, including tracking
+        # variants: persisted page signatures and selections depend on them.
+        # Entity-level cross-page/task deduplication belongs to D05, not a silent
+        # migration during detail-parser rollout.
+        return super().cards(page)
 
     def validate_detail_identity(self, expected_url: str, page: PageSnapshot) -> None:
         expected = self.job_identity(expected_url)
