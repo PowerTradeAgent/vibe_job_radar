@@ -76,6 +76,7 @@ class NativeBackend(PlaywrightBackend):
         self._page_sessions, self._bound_pages = {}, {}
         self._page_creation = 0
         self._rejected_targets = set()
+        self._pending_rejected_targets = []
         self._rejected_pages = []
         self.native_counts = {'document':0, 'business':0, 'asset':0, 'robots':0, 'login':0,
                               'blocked':0, 'responses':0}
@@ -119,21 +120,32 @@ class NativeBackend(PlaywrightBackend):
                 pending.append(page)
 
     def _reject_target(self, target):
-        # Root and parent CDP attachments can report the same popup. Mark first,
-        # before send() yields, and let the browser guard close it exactly once.
+        # Unknown targets remain paused by waitForDebuggerOnStart. Do not call
+        # closeTarget inside attachedToTarget: closing during window creation
+        # can deadlock the opener's synchronous browser call. Never resume an
+        # unsupported target; stop outbound work and close on the owner loop.
         rejected = self.__dict__.setdefault('_rejected_targets', set())
+        self.cancelled.set()
+        self._fatal('native_surface_unsupported')
         if target in rejected:
             return
         if len(rejected) >= 128:
-            self.cancelled.set()
-            self._fatal('native_surface_unsupported')
             return
         rejected.add(target)
-        self._cdp.send('Target.closeTarget', {'targetId': target})
+        self.__dict__.setdefault('_pending_rejected_targets', []).append(target)
 
     def _drain_rejected_pages(self):
-        # Runs on the owner worker, not inside a popup/target event. Usually the
-        # Target guard already closed the page. No intercepted request resumes.
+        # Called outside target/page events. Paused targets have never had
+        # Runtime.runIfWaitingForDebugger or Fetch.continueRequest sent to them.
+        targets = self.__dict__.setdefault('_pending_rejected_targets', [])
+        while targets:
+            target = targets.pop(0)
+            try:
+                self._cdp.send('Target.closeTarget', {'targetId': target})
+            except Exception:
+                self.cancelled.set()
+                self._fatal('native_protocol_error')
+                raise CrawlError('native_protocol_error') from None
         pending = self.__dict__.setdefault('_rejected_pages', [])
         while pending:
             page = pending.pop(0)
@@ -520,6 +532,7 @@ class NativeBackend(PlaywrightBackend):
         return tuple(self._observations)
 
     def _check_error(self):
+        self._drain_rejected_pages()
         if not getattr(self, 'policy_check', lambda: True)():
             self._fatal('native_policy_changed')
         if self.error:
@@ -623,4 +636,4 @@ class NativeBackend(PlaywrightBackend):
         self._sessions.clear(); self._pending.clear(); self._requests.clear(); self._hops.clear()
         self._observations.clear(); self._auth_attempts.clear()
         self._page_sessions.clear(); self._bound_pages.clear()
-        self._rejected_targets.clear(); self._rejected_pages.clear()
+        self._rejected_targets.clear(); self._pending_rejected_targets.clear(); self._rejected_pages.clear()

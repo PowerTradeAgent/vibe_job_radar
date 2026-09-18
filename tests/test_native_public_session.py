@@ -46,6 +46,9 @@ class NativePublicSessionTests(TestCase):
         self.b._install_target = Mock()
         self.b._attached({'sessionId': 'automatic', 'targetInfo': {
             'targetId':'popup', 'type':'page', 'url':'about:blank'}})
+        self.b._cdp.send.assert_not_called()
+        self.assertEqual(self.b._pending_rejected_targets, ['popup'])
+        self.b._drain_rejected_pages()
         self.b._cdp.send.assert_called_once_with('Target.closeTarget', {'targetId':'popup'})
         self.b._install_target.assert_not_called()
 
@@ -54,6 +57,9 @@ class NativePublicSessionTests(TestCase):
         self.b._install_target = Mock()
         self.b._attached({'sessionId': 'automatic', 'targetInfo': {
             'targetId':'popup', 'type':'page', 'url':'about:blank', 'openerId':'another-page'}})
+        self.b._cdp.send.assert_not_called()
+        self.assertEqual(self.b._pending_rejected_targets, ['popup'])
+        self.b._drain_rejected_pages()
         self.b._cdp.send.assert_called_once_with('Target.closeTarget', {'targetId':'popup'})
         self.b._install_target.assert_not_called()
 
@@ -62,6 +68,9 @@ class NativePublicSessionTests(TestCase):
         self.b._install_target = Mock()
         self.b._attached({'sessionId': 'automatic', 'targetInfo': {
             'targetId':'popup', 'type':'page', 'url':fixture.URL+'/apply'}})
+        self.b._cdp.send.assert_not_called()
+        self.assertEqual(self.b._pending_rejected_targets, ['popup'])
+        self.b._drain_rejected_pages()
         self.b._cdp.send.assert_called_once_with('Target.closeTarget', {'targetId':'popup'})
         self.b._install_target.assert_not_called()
 
@@ -141,11 +150,14 @@ class NativePublicSessionTests(TestCase):
     def test_same_rejected_target_is_closed_only_once_across_callbacks(self):
         self.b._reject_target('popup')
         self.b._reject_target('popup')
+        self.b._cdp.send.assert_not_called()
+        self.b._drain_rejected_pages()
         self.b._cdp.send.assert_called_once_with('Target.closeTarget', {'targetId':'popup'})
 
     def test_reentrant_rejection_is_deduplicated_before_send(self):
         self.b._cdp.send.side_effect = lambda *_: self.b._reject_target('popup')
         self.b._reject_target('popup')
+        self.b._drain_rejected_pages()
         self.assertEqual(self.b._cdp.send.call_count, 1)
 
     def test_browser_closed_popup_needs_no_second_close(self):
@@ -168,3 +180,20 @@ class NativePublicSessionTests(TestCase):
         self.assertTrue(self.b.cancelled.is_set())
         self.assertEqual(len(self.b._rejected_targets), 128)
         self.assertEqual(self.b.error, 'native_surface_unsupported')
+
+    def test_rejected_target_is_never_resumed_while_waiting_for_owner(self):
+        self.b._reject_target('popup')
+        self.b._cdp.send.assert_not_called()
+        self.b._send.assert_not_called()
+        self.assertTrue(self.b.cancelled.is_set())
+        self.assertEqual(self.b.error, 'native_surface_unsupported')
+        self.b._drain_rejected_pages()
+        self.b._cdp.send.assert_called_once_with('Target.closeTarget', {'targetId':'popup'})
+
+    def test_rejected_target_close_error_is_not_ignored(self):
+        self.b._reject_target('popup')
+        self.b._cdp.send.side_effect=RuntimeError('fixture')
+        with self.assertRaises(CrawlError) as caught:
+            self.b._drain_rejected_pages()
+        self.assertEqual(caught.exception.code,'native_protocol_error')
+        self.assertTrue(self.b.cancelled.is_set())

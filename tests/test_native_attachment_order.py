@@ -9,6 +9,7 @@ class NativeAttachmentOrderTests(TestCase):
     def make_backend(self, reentrant=True):
         b = NativeBackend.__new__(NativeBackend)
         b._closing = False
+        b.cancelled = Mock()
         b._sessions = {}
         b._adopting = set()
         b._page_creation = 1
@@ -76,5 +77,8 @@ class NativeAttachmentOrderTests(TestCase):
     def test_unsupported_target_is_closed_without_any_credentials(self):
         b, events, _ = self.make_backend()
         b._attached({'targetInfo': {'type': 'worker', 'targetId': 'worker'}, 'sessionId': 'worker-session'})
-        self.assertEqual(events, ['Target.closeTarget'])
+        self.assertEqual(events, [])
         b._install_target.assert_not_called()
+        b.cancelled.set.assert_called_once()
+        b._drain_rejected_pages()
+        self.assertEqual(events, ['Target.closeTarget'])

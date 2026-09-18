@@ -274,6 +274,7 @@ def main():
                     result['checks'].append('reviewed native login POST executes only in explicit authentication mode')
                     checkpoint('negative-popup')
                     b.page.evaluate("() => {window.open('/apply'); window.open('/apply', '_blank', 'noopener');}")
+                    b.pump()  # Production owner loop drains rejected paused targets.
                     b.page.wait_for_timeout(150)
                     assert len(b.context.pages)==1, 'uncontrolled popup escaped the owned-page boundary'
                     assert not any(r['path']=='/apply' for r in good.requests)
