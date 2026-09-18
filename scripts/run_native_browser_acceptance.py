@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
+from dataclasses import fields, replace
 import faulthandler
 import gzip
 import http.server
@@ -30,10 +31,14 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
 
 from test_native_acquisition import adapter,HOST,URL,SECRET
+from test_liepin_recorded_layout import markup as recorded_markup, posting as recorded_posting, BODY as RECORDED_BODY, TITLE as RECORDED_TITLE
 from vibe_job_radar.guided.native_browser import NativeBackend
 from vibe_job_radar.guided.rate import RateLedger,Limits
 from vibe_job_radar.guided.service import GuidedService
-from vibe_job_radar.guided.adapters import Registry
+from vibe_job_radar.guided.adapters import DOMAdapter, Registry
+from vibe_job_radar.guided.liepin import LiepinAdapter
+from vibe_job_radar.guided.native_policy import NativeRule
+from vibe_job_radar.store import Store
 from vibe_job_radar.guided.diagnostic_trace import DiagnosticTrace
 from vibe_job_radar.network_policy import NetworkPolicy,use_policy
 from vibe_job_radar.workspace import Workspace
@@ -126,6 +131,10 @@ class Fixture:
                 elif path=='/fixture.js':
                     js="fetch('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:"+json.dumps(SECRET)+"})}).then(r=>r.json()).then(j=>{let a=document.createElement('a');a.href=j.jobs[0].url;a.textContent=j.jobs[0].title;document.querySelector('#jobs').append(a);});"
                     self.send(js,'application/javascript',compressed=True)
+                elif path=='/recorded-search':
+                    self.send('<!doctype html><a href="/job/123.shtml">'+RECORDED_TITLE+'</a>')
+                elif path=='/job/123.shtml':
+                    self.send(recorded_markup(recorded_posting(url=URL+'/job/123.shtml')))
                 elif path=='/job/1':self.send('<h1>时间序列算法工程师</h1><div class="job-description">要求熟练使用 Cursor 进行 AI 辅助编程，编写单元测试与代码审查，负责时间序列预测系统。仅为本地人工测试，不是真实招聘信息。</div>')
                 elif path=='/redirect':self.send('',status=302,extra=[('Location','/search')])
                 elif path=='/cross':self.send('',status=302,extra=[('Location','https://outside.fixture.test/forbidden')])
@@ -274,6 +283,39 @@ def main():
                     assert task['saved_session_status']=='cleared'
                     assert not (workspace.root/'.radar-sessions/fixture.json').exists()
                     assert not service._backends and not service._session_leases
+                    service.close();services.remove(service)
+                    checkpoint('native-recorded-liepin-layout')
+                    # This artificial origin uses the published representation,
+                    # never a real recruiting URL or copied third-party JD. Use
+                    # the actual Liepin parser and original service/store/report.
+                    template = adapter()
+                    layout_contract = replace(template.native_contract,
+                        rules=template.native_contract.rules + (
+                            NativeRule('recorded_documents', HOST,
+                                r'/(?:recorded-search|job/123\.shtml)',
+                                resources=('Document',), role='document'),))
+                    layout_adapter = LiepinAdapter(**{
+                        **{field.name:getattr(template, field.name) for field in fields(DOMAdapter)},
+                        'search_base':URL+'/recorded-search',
+                        'detail_pattern':r'^/job/[0-9]+\.shtml$',
+                        'native_contract':layout_contract})
+                    layout_workspace = Workspace(root/'recorded-layout-workspace')
+                    service = GuidedService(layout_workspace, registry=Registry([layout_adapter]),
+                        ledger=RateLedger(root/'recorded-layout.sqlite',Limits(page_interval=0,request_interval=0)),
+                        native_backend_factory=factory)
+                    services.append(service)
+                    service.create({**query, 'persist_session':False}); task=wait(service)
+                    assert task['status']=='ready' and len(task['cards'])==1, task.get('code')
+                    service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]})
+                    task=wait(service)
+                    assert task['status']=='completed' and task['outcome']['saved']==1, task.get('code')
+                    layout_report=layout_workspace.report(task['report_id'])
+                    assert layout_report['manifest']['stats']['full_text_job_groups']==1
+                    with Store(layout_workspace.db) as store:
+                        records=store.records()
+                        assert len(records)==1 and records[0].title==RECORDED_TITLE
+                        assert records[0].text==RECORDED_BODY, 'native JD changed or mixed with recommendations'
+                    result['checks'].append('actual Liepin parser reads artificial no-h1/raw-newline JSON-LD/dd layout through native search, selected full JD, Store and original report; not a live-site claim')
                     service.close();services.remove(service)
                     checkpoint('native-redirect')
                     b=backend('redirect');b.open(URL+'/redirect');assert b.page.url==URL+'/search'
