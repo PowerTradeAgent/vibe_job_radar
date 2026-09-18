@@ -58,7 +58,9 @@ class ObservedBackend(acceptance.NativeBackend):
                 'creation_active': bool(self._page_creation),
                 'already_owned': info.get('targetId') in self._sessions.values(),
                 'has_opener': bool(info.get('openerId')),
-                'blank': info.get('url', '') in ('', 'about:blank')})
+                'blank': info.get('url', '') in ('', 'about:blank'),
+                'internal_scheme': urlsplit(info.get('url', '')).scheme if urlsplit(info.get('url', '')).scheme in {'chrome', 'chrome-extension', 'devtools', 'about'} else 'web_or_other',
+                'internal_host': urlsplit(info.get('url', '')).hostname if urlsplit(info.get('url', '')).scheme in {'chrome', 'devtools'} else None})
         return super()._attached(event)
 
     def _send(self, session, method, params=None, callback=None):
