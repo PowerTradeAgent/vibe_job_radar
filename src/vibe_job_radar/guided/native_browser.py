@@ -269,9 +269,10 @@ class NativeBackend(PlaywrightBackend):
         # Observed in Chrome153 headed startup: this is the address-bar UI,
         # not a web page or collection popup. Never generalize to all 'other'
         # targets, extensions or chrome:// pages.
-        return (info.get('type') == 'other' and not info.get('openerId')
+        return (info.get('type') in {'other', 'browser_ui'} and not info.get('openerId')
                 and info.get('url') in {'chrome://omnibox-popup.top-chrome',
-                                        'chrome://omnibox-popup.top-chrome/'})
+                                        'chrome://omnibox-popup.top-chrome/',
+                                        'chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html'})
 
     def _target_in_context(self, info):
         expected = getattr(self, '_context_id', None)

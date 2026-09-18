@@ -62,3 +62,18 @@ class BrowserUITests(TestCase):
         self.b._closing = True
         self.b._attached({'sessionId': 'ui', 'targetInfo': self.info})
         self.b._cdp.send.assert_not_called()
+
+    def test_exact_browser_ui_type_and_observed_aim_document(self):
+        for url in ('chrome://omnibox-popup.top-chrome/',
+                    'chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html'):
+            with self.subTest(url=url):
+                self.assertTrue(NativeBackend._browser_chrome_ui(
+                    {**self.info, 'type': 'browser_ui', 'url': url}))
+
+    def test_browser_ui_type_does_not_accept_arbitrary_documents(self):
+        for url in ('https://omnibox-popup.top-chrome/',
+                    'chrome://omnibox-popup.top-chrome/unreviewed.html',
+                    'chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html?token=x'):
+            with self.subTest(url=url):
+                self.assertFalse(NativeBackend._browser_chrome_ui(
+                    {**self.info, 'type': 'browser_ui', 'url': url}))

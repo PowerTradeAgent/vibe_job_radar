@@ -33,6 +33,7 @@ from .native_policy import capability as native_capability, contract_for
 from ..network_policy import current_policy
 from .contracts import CrawlError
 from .login_return import LoginReturnManager
+from .session_reuse import reuse_current_session
 from .rate import RateLedger, RateLimit
 from .transport import diagnose_host
 from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
@@ -43,6 +44,8 @@ from .browser_choice import BrowserChoice, CHOICES, validate_choice
 from .. import tls_context
 
 MESSAGES = {
+    'session_reuse_unavailable': '当前采集会话不是可复用的空闲会话。请先完成原任务的登录/等待，或停止该会话；不会自动另开浏览器重试。',
+    'session_reuse_incompatible': '当前会话的平台、后端、浏览器或网络设置不匹配。请保留原任务，或明确停止旧会话后再开始；不会串用身份。',
     'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
     'list_page_limit': '本任务列表页数已达到上限。本任务仍受站点共享配额限制。',
     'operation_error': '操作未完成，已有结果保留。请检查环境与页面。',
@@ -247,6 +250,8 @@ class GuidedService:
 
     def create(self, data):
         adapter = self.registry.get(data.get('platform'))
+        if type(data.get('reuse_current_session', False)) is not bool:
+            raise InputError('复用当前采集会话必须为明确的布尔选项。')
         if type(data.get('diagnostics', False)) is not bool:
             raise InputError('诊断选项必须为布尔值。')
         mode = data.get('backend', 'bridge')
@@ -278,7 +283,8 @@ class GuidedService:
                  'status': 'queued', 'code': 'new', 'cards': [], 'pages_seen': [], 'report_id': '',
                  'phase': 'search', 'selection': [], 'created_at': utc_now(), 'updated_at': utc_now(),
                  'authentication': 'not_checked', 'certification': 'not_live_verified',
-                 'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode}
+                 'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode,
+                 'reuse_current_session': data.get('reuse_current_session', False), 'session_reused': False}
         with self._lock:
             if self._busy:
                 raise InputError('已有任务运行，请先暂停。')
@@ -551,6 +557,7 @@ class GuidedService:
             raise BrowserStartupError(failed_report(environment_report(),
                 ValueError('invalid saved browser selection'), code='browser_choice_invalid'))
         ident = state['id']
+        reuse_current_session(self, state)
         previous = self._backends.get(ident)
         native = state.get('backend', 'bridge') == 'native'
         if native and previous and previous.wire.network_policy.fingerprint != current_policy().fingerprint:
