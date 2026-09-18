@@ -1,8 +1,9 @@
 """Opt-in Chromium native HTTP/TLS with a public-target opaque CONNECT guard.
 
-CDP Fetch observes/authorizes *each* hop. Playwright Route alone intentionally
-skips redirected requests and can synthesize preflight responses; this backend
-therefore does not install a Playwright HTTP route, fetch or fulfill handler.
+CDP Fetch observes/authorizes each owned-page hop. A context route rejects
+unowned pages before their initial request (a page event can arrive too late).
+Owned traffic continues unchanged; no route.fetch/fulfill or HTTP replay is used.
+Cross-origin preflights remain outside the supported site contracts.
 Only application-owned browser targets are used. Worker/OOPIF targets are stopped
 before running until their complete request accounting is separately supported.
 """
@@ -75,6 +76,9 @@ class NativeBackend(PlaywrightBackend):
         self._adopting = set()
         self._page_sessions, self._bound_pages = {}, {}
         self._page_creation = 0
+        self._rejected_targets = set()
+        self._pending_rejected_targets = []
+        self._rejected_pages = []
         self.native_counts = {'document':0, 'business':0, 'asset':0, 'robots':0, 'login':0,
                               'blocked':0, 'responses':0}
         super().__init__(adapter, ledger, cancelled, progress, headless=headless,
@@ -87,9 +91,16 @@ class NativeBackend(PlaywrightBackend):
                 'args': [*options['args'], '--proxy-bypass-list=<-loopback>', '--block-new-web-contents']}
 
     def _configure_context(self):
+        # Install before any page is created. Target debugger pause does not
+        # alone prevent the browser's initial popup network request.
+        self.context.route('**/*', self._ownership_route)
         self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._page_created)
         self._cdp = self.browser.new_browser_cdp_session()
+        contexts = self._cdp.send('Target.getBrowserContexts')['browserContextIds']
+        if len(contexts) != 1:
+            raise CrawlError('native_protocol_error')
+        self._context_id = contexts[0]
         # A context extra-header UA can be dropped on native redirects. Set
         # the actual browser-reported UA plus our token on every owned target
         # before it runs; never rotate or impersonate another browser.
@@ -102,16 +113,77 @@ class NativeBackend(PlaywrightBackend):
         self._cdp.send('Target.setAutoAttach', {'autoAttach':True,
             'waitForDebuggerOnStart':True, 'flatten':True})
 
-    def _page_created(self, page):
-        # Playwright emits this event while context.new_page() is still
-        # returning. Do not initialize the public CDP session in that callback:
-        # a synchronous protocol call yields to the caller's greenlet and can
-        # make _new_page() bind the same page a second time. The caller alone
-        # installs controls, before any navigation. Unsolicited pages stop here.
-        if not self._page_creation or self._closing:
-            page.close()
-            if not self._closing:
+    def _ownership_route(self, route):
+        """Only admit requests whose main page already has our CDP controls.
+
+        This is an early ownership gate, not a transport: the browser retains
+        original headers, TLS, cookies, method and body. Site operations and
+        redirects still require the independent native controller's approval.
+        """
+        try:
+            frame = route.request.frame
+            page = frame.page
+            session = self._bound_pages.get(page)
+            owned = (session in self._page_sessions and frame == page.main_frame)
+            allowed = (owned and not self._closing and not self._halted
+                       and not self.cancelled.is_set())
+        except Exception:
+            allowed = owned = False
+        if not allowed:
+            if not owned:
+                self.cancelled.set()
                 self._fatal('native_surface_unsupported')
+            route.abort('blockedbyclient')
+            return
+        # No parameter overrides, fetch, response reconstruction or retries.
+        route.continue_()
+
+    def _page_created(self, page):
+        # Never synchronously close a popup from its creation event. Chromium
+        # may be waiting for that very event to finish window.open(), while the
+        # browser Target guard is already closing the paused target. Closing
+        # again here can deadlock headed Edge. No page is admitted in this path.
+        if self._closing:
+            return
+        if not self._page_creation:
+            self.cancelled.set()  # Opaque tunnel also stops, even for an unexpected target.
+            self._fatal('native_surface_unsupported')
+            pending = self.__dict__.setdefault('_rejected_pages', [])
+            if len(pending) < 8 and page not in pending:
+                pending.append(page)
+
+    def _reject_target(self, target):
+        # Do not call closeTarget inside attachedToTarget: closing during
+        # window creation can deadlock the opener's synchronous browser call.
+        # Our code never resumes an unsupported target. The context ownership
+        # route blocks its initial HTTP independently of debugger pause state.
+        rejected = self.__dict__.setdefault('_rejected_targets', set())
+        self.cancelled.set()
+        self._fatal('native_surface_unsupported')
+        if target in rejected:
+            return
+        if len(rejected) >= 128:
+            return
+        rejected.add(target)
+        self.__dict__.setdefault('_pending_rejected_targets', []).append(target)
+
+    def _drain_rejected_pages(self):
+        # Called outside target/page events. Our controller sends no resume
+        # or request-continuation commands to these unowned targets.
+        targets = self.__dict__.setdefault('_pending_rejected_targets', [])
+        while targets:
+            target = targets.pop(0)
+            try:
+                self._cdp.send('Target.closeTarget', {'targetId': target})
+            except Exception:
+                self.cancelled.set()
+                self._fatal('native_protocol_error')
+                raise CrawlError('native_protocol_error') from None
+        pending = self.__dict__.setdefault('_rejected_pages', [])
+        while pending:
+            page = pending.pop(0)
+            if not page.is_closed():
+                page.close()
 
     def _new_page(self):
         # Only application-requested blank tabs can become controlled surfaces.
@@ -192,14 +264,39 @@ class NativeBackend(PlaywrightBackend):
                 return
             raise
 
+    @staticmethod
+    def _browser_chrome_ui(info):
+        # Observed in Chrome153 headed startup: this is the address-bar UI,
+        # not a web page or collection popup. Never generalize to all 'other'
+        # targets, extensions or chrome:// pages.
+        return (info.get('type') in {'other', 'browser_ui'} and not info.get('openerId')
+                and info.get('url') in {'chrome://omnibox-popup.top-chrome',
+                                        'chrome://omnibox-popup.top-chrome/',
+                                        'chrome://omnibox-popup.top-chrome/omnibox_popup_aim.html'})
+
+    def _target_in_context(self, info):
+        expected = getattr(self, '_context_id', None)
+        return expected is None or info.get('browserContextId') == expected
+
     def _attached(self, event):
         if self._closing:
             return
         info, session = event['targetInfo'], event['sessionId']
+        if not self._target_in_context(info):
+            # Chromium can emit an initial default-context blank target. It is
+            # not a page of our isolated collection context. Release only this
+            # automatic debugger attachment; do not cancel the collection.
+            self._cdp.send('Target.detachFromTarget', {'sessionId': session})
+            return
+        if self._browser_chrome_ui(info):
+            # Detach our automatic debugger only. Do not initialize request
+            # controls, send credentials, navigate or close browser UI.
+            self._cdp.send('Target.detachFromTarget', {'sessionId': session})
+            return
         if (info['type'] != 'page' or len(self._sessions) >= 8
                 or info.get('openerId') or not self._page_creation
                 or info.get('url', '') not in ('', 'about:blank')):
-            self._cdp.send('Target.closeTarget', {'targetId':info['targetId']})
+            self._reject_target(info['targetId'])
             return
         target = info['targetId']
         if session in self._sessions or target in self._adopting:
@@ -302,8 +399,11 @@ class NativeBackend(PlaywrightBackend):
                 return
             method, data = message.get('method'), message.get('params', {})
             if method == 'Target.attachedToTarget':
-                # Dedicated/shared workers and OOPIFs are unsupported surfaces.
-                self._cdp.send('Target.closeTarget', {'targetId':data['targetInfo']['targetId']})
+                if self._browser_chrome_ui(data['targetInfo']):
+                    self._send(session, 'Target.detachFromTarget', {'sessionId': data['sessionId']})
+                else:
+                    # Dedicated/shared workers and OOPIFs remain unsupported.
+                    self._reject_target(data['targetInfo']['targetId'])
             elif method == 'Fetch.requestPaused':
                 self._paused(session, data)
             elif method == 'Fetch.authRequired':
@@ -493,6 +593,7 @@ class NativeBackend(PlaywrightBackend):
         return tuple(self._observations)
 
     def _check_error(self):
+        self._drain_rejected_pages()
         if not getattr(self, 'policy_check', lambda: True)():
             self._fatal('native_policy_changed')
         if self.error:
@@ -583,6 +684,7 @@ class NativeBackend(PlaywrightBackend):
             self._halted = False
 
     def pump(self):
+        self._drain_rejected_pages()
         if not self._closing and not getattr(self, 'policy_check', lambda: True)():
             self._fatal('native_policy_changed')
         super().pump()
@@ -595,3 +697,4 @@ class NativeBackend(PlaywrightBackend):
         self._sessions.clear(); self._pending.clear(); self._requests.clear(); self._hops.clear()
         self._observations.clear(); self._auth_attempts.clear()
         self._page_sessions.clear(); self._bound_pages.clear()
+        self._rejected_targets.clear(); self._pending_rejected_targets.clear(); self._rejected_pages.clear()

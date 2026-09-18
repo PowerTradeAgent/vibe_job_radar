@@ -8,7 +8,7 @@ if (location.hash) history.replaceState(null,'',location.pathname+location.searc
 let requestedTask=new URLSearchParams(location.search).get('task')||'';
 let state=null, current=null, selecting=new Set(), loadedId='', requesting=false, sticky='';
 const installationNames={restart_required:'组件更新后需重启工作台再检查',not_started:'本次会话未执行安装（不表示缺少组件）',installing:'正在安装',installed:'安装并启动验证成功',installed_not_ready:'安装命令成功，但启动检查失败',dependency_install_failed:'安装失败',dependency_install_timeout:'安装超时'};
-const cardStatus={discovered:'待选择',opening:'读取中',ok:'正文已保存',structure_changed:'无法确认独立完整正文',invalid_job_data:'岗位字段无效或正文超出限制',not_job_url:'不是已识别的详情地址',manual_required:'需要正常登录或验证',http_401:'需要核对登录或权限',http_403:'站点拒绝访问',http_429:'来源要求等待',paused:'已暂停',network_error:'网络未完成'};
+const cardStatus={job_identity_mismatch:'详情身份不一致，未保存',jd_incomplete:'正文尚未完整展开，未保存',discovered:'待选择',opening:'读取中',ok:'正文已保存',structure_changed:'无法确认独立完整正文',invalid_job_data:'岗位字段无效或正文超出限制',not_job_url:'不是已识别的详情地址',manual_required:'需要正常登录或验证',http_401:'需要核对登录或权限',http_403:'站点拒绝访问',http_429:'来源要求等待',paused:'已暂停',network_error:'网络未完成'};
 const statusNames={queued:'准备中',running:'执行中',ready:'可以选择岗位',waiting_rate:'按来源要求等待',waiting_manual:'需要你处理',paused:'已暂停',completed:'批次结束',stopped:'已停止',interrupted:'上次服务已退出'};
 async function api(path,data){const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:{'X-Radar-Token':token,...(data===undefined?{}:{'Content-Type':'application/json'})},body:data===undefined?undefined:JSON.stringify(data),cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'操作失败');return result;}
 function note(text){$('busy').textContent=text;}
@@ -21,7 +21,7 @@ function render(){
  const tls=state.tls_environment;
  if(tls){
   $('tls-repair').hidden=!tls.windows;
-  $('tls-environment').textContent='TLS 验证引擎：'+tls.engine+' · '+tls.reason+(tls.restart_required?' · 组件操作后需重新启动工作台':'');
+  $('tls-environment').textContent='TLS 验证引擎：'+tls.engine+' · '+tls.reason+(tls.restart_required?' · 组件操作后需重新启动工作台再检查':'');
  }
  const choice=state.browser_choice;
  if(choice){
@@ -53,6 +53,8 @@ function render(){
  if(requestedTask&&state.jobs.some(j=>j.id===requestedTask)){$('task').value=requestedTask;requestedTask='';}
  current=state.jobs.find(j=>j.id===$('task').value)||null;
  if(current&&loadedId!==current.id){selecting=new Set(current.selection||[]);loadedId=current.id;}
+ $('login-return-status').textContent=current?({watching:'等待平台返回本任务原检索页；列表连续可读后自动继续，最长10分钟。不会自动填密或绕过验证。',resumed:'已识别本任务可读列表，已自动接回任务；不等于账号认证证明。',timed_out:'自动接续等待已结束；会话未删除，可按原按钮继续。',needs_attention:'当前页面或网络需要处理，自动接续已停止。',cancelled:'自动接续已取消。'}[current.login_continuation]||''):'';
+ $('session-reuse-status').textContent=current?.session_reused?'已复用当前采集浏览器会话；是否仍然登录以平台正常响应为准。停止会话或退出程序即失效。':'';
  if(current){$('resume').textContent=current.authentication==='manual_pending'?'登录完成，继续原任务':'继续原任务';$('task-status').textContent=`${current.backend==='native'?'原生网络实验':'原有HTTP桥'} · ${statusNames[current.status]||current.status}：${current.message}`;
  if(current.code==='non_public_address'||current.code==='dns_error'||current.code?.startsWith('encrypted_dns_')){
  $('task-status').textContent+='\n此页面请求由本程序在网络校验阶段中止；采集浏览器可能显示 ERR_BLOCKED_BY_CLIENT。它不等于平台封禁或 Edge 自身拒绝。请检查同一平台的当前网络策略；旧任务错误与新诊断不是同一次请求。';
@@ -75,9 +77,9 @@ function render(){
 function renderCards(){const root=$('cards');root.replaceChildren();if(!current.cards.length){root.textContent='还没有岗位清单。完成搜索或人工登录后，点击“读取当前列表”。';return;}
  current.cards.forEach(c=>{const box=document.createElement('div');box.className='card';const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.checked=selecting.has(c.id);input.addEventListener('change',()=>{if(input.checked)selecting.add(c.id);else selecting.delete(c.id);});label.append(input,document.createTextNode(' '+c.title));const source=document.createElement('small');source.textContent='列表观察到的链接：'+c.url;const outcome=document.createElement('small');outcome.textContent='结果：'+(cardStatus[c.status]||c.status)+(c.resolved_url?' · 详情真实地址：'+c.resolved_url:'');box.append(label,source,outcome);root.append(box);});}
 async function refresh(){state=await api('/api/guided/state');render();}
-$('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(async()=>{const data=Object.fromEntries(new FormData(f));data.roles=[data.role];delete data.role;data.max_pages=Number(data.max_pages);data.max_jobs=Number(data.max_jobs);data.consent=f.elements.consent.checked;data.diagnostics=f.elements.diagnostics.checked;data.native_consent=f.elements.native_consent.checked;const r=await api('/api/guided/create',data);loadedId='';await refresh();$('task').value=r.id;render();});});
+$('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(async()=>{const data=Object.fromEntries(new FormData(f));data.roles=[data.role];delete data.role;data.max_pages=Number(data.max_pages);data.max_jobs=Number(data.max_jobs);data.consent=f.elements.consent.checked;data.diagnostics=f.elements.diagnostics.checked;data.reuse_current_session=f.elements.reuse_current_session.checked;data.native_consent=f.elements.native_consent.checked;const r=await api('/api/guided/create',data);loadedId='';await refresh();$('task').value=r.id;render();});});
 $('task').addEventListener('change',()=>{loadedId='';render();});
-for(const [button,action] of Object.entries({'login':'login','capture':'capture','search-again':'search','pause':'pause','resume':'resume','stop':'stop'}))$(button).addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action})));
+for(const [button,action] of Object.entries({'login':'login','capture':'capture','search-again':'search','pause':'pause','resume':'resume','stop':'stop'}))$(button).addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action,...(action==='login'?{auto_continue:$('auto-login-return').checked}:{})})));
 $('collect').addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action:'collect',selected:[...selecting]})));
 $('select-all').addEventListener('click',()=>{if(!current)return;selecting=new Set(current.cards.slice(0,current.max_jobs).map(c=>c.id));renderCards();});
 $('use-browser-choice').addEventListener('click',()=>{

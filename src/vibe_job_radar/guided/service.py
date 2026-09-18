@@ -32,6 +32,8 @@ from .native_browser import NativeBackend
 from .native_policy import capability as native_capability, contract_for
 from ..network_policy import current_policy
 from .contracts import CrawlError
+from .login_return import LoginReturnManager
+from .session_reuse import reuse_current_session
 from .rate import RateLedger, RateLimit
 from .transport import diagnose_host
 from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
@@ -42,6 +44,8 @@ from .browser_choice import BrowserChoice, CHOICES, validate_choice
 from .. import tls_context
 
 MESSAGES = {
+    'session_reuse_unavailable': '当前采集会话不是可复用的空闲会话。请先完成原任务的登录/等待，或停止该会话；不会自动另开浏览器重试。',
+    'session_reuse_incompatible': '当前会话的平台、后端、浏览器或网络设置不匹配。请保留原任务，或明确停止旧会话后再开始；不会串用身份。',
     'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
     'list_page_limit': '本任务列表页数已达到上限。本任务仍受站点共享配额限制。',
     'operation_error': '操作未完成，已有结果保留。请检查环境与页面。',
@@ -81,6 +85,8 @@ MESSAGES = {
     'resource_domain_blocked': '页面需要适配器尚未允许的资源域名，已阻止；需要审核站点适配，不能任意放行。',
     'write_not_allowed': '该页面需要未开放的写入请求。采集模式只读，不代投简历或发消息。',
     'redirect_requires_attention': '目标重定向无法安全处理，请到采集浏览器确认页面。',
+    'job_identity_mismatch': '详情并非所选岗位或页面身份存在冲突，未保存该正文。',
+    'jd_incomplete': '当前职位介绍尚未完整展开，未将摘要或登录提示保存为完整正文。',
     'login_origin_changed': '页面离开了该平台允许的登录域名，未填入账号密码。请人工确认。',
     'not_job_list': '当前是登录页、首页或职位详情，不是本次搜索列表；没有把推荐岗位当成搜索结果。登录完成后点“继续原任务”返回原搜索，已选岗位和已取得正文保留。',
     'invalid_job_data': '此条正文或字段不符合岗位数据格式，未截断或冒充成功；本批其他岗位继续处理。',
@@ -144,6 +150,7 @@ class GuidedService:
         self._active = None
         self._stop_ident = None
         self._backends = {}
+        self._login_return = LoginReturnManager()
         self._traces = {}  # Bounded in-memory metadata; no automatic disk export.
         self._thread = None
         self._last_install = 'not_started'
@@ -243,6 +250,8 @@ class GuidedService:
 
     def create(self, data):
         adapter = self.registry.get(data.get('platform'))
+        if type(data.get('reuse_current_session', False)) is not bool:
+            raise InputError('复用当前采集会话必须为明确的布尔选项。')
         if type(data.get('diagnostics', False)) is not bool:
             raise InputError('诊断选项必须为布尔值。')
         mode = data.get('backend', 'bridge')
@@ -274,7 +283,8 @@ class GuidedService:
                  'status': 'queued', 'code': 'new', 'cards': [], 'pages_seen': [], 'report_id': '',
                  'phase': 'search', 'selection': [], 'created_at': utc_now(), 'updated_at': utc_now(),
                  'authentication': 'not_checked', 'certification': 'not_live_verified',
-                 'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode}
+                 'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode,
+                 'reuse_current_session': data.get('reuse_current_session', False), 'session_reused': False}
         with self._lock:
             if self._busy:
                 raise InputError('已有任务运行，请先暂停。')
@@ -292,8 +302,11 @@ class GuidedService:
         permitted = {'search', 'login', 'capture', 'more', 'collect', 'pause', 'stop', 'resume'}
         if action not in permitted:
             raise InputError('未知操作。')
+        if 'auto_continue' in data and (action != 'login' or type(data['auto_continue']) is not bool):
+            raise InputError('自动接续只用于本次登录，必须明确勾选。')
         if action in {'pause','stop'}:
             with self._lock:
+                self._login_return.disarm(ident)
                 if self._busy and self._active is None:
                     raise InputError('浏览器安装正在运行；此任务按钮不能取消安装。')
                 if self._active and self._active != ident:
@@ -322,6 +335,10 @@ class GuidedService:
         with self._lock:
             if self._busy:
                 raise InputError('当前动作尚未结束，请先暂停或等待。')
+            self._login_return.disarm(ident)
+            if action == 'login':
+                state['auto_continue_after_login'] = data.get('auto_continue', False)
+            state['login_continuation'] = 'off'
             self._save(state, 'opening' if action in {'search','login'} else state['code'],
                        status='queued', auto_resume=False, next_allowed_at=None)
             self._submit(action, ident, secret)
@@ -540,6 +557,7 @@ class GuidedService:
             raise BrowserStartupError(failed_report(environment_report(),
                 ValueError('invalid saved browser selection'), code='browser_choice_invalid'))
         ident = state['id']
+        reuse_current_session(self, state)
         previous = self._backends.get(ident)
         native = state.get('backend', 'bridge') == 'native'
         if native and previous and previous.wire.network_policy.fingerprint != current_policy().fingerprint:
@@ -635,6 +653,9 @@ class GuidedService:
                         page = backend.open(row['url'])
                     with observe(trace, 'detail_identity', url=page.url, entity=row['id']):
                         final_url = adapter.accept_url(page.url, detail=True)
+                        validate_identity = getattr(adapter, 'validate_detail_identity', None)
+                        if callable(validate_identity):
+                            validate_identity(row['url'], page)
                     with observe(trace, 'detail_parse', url=page.url, entity=row['id']):
                         parsed = adapter.detail(page)
                     with observe(trace, 'persist', entity=row['id']):
@@ -647,11 +668,16 @@ class GuidedService:
                             raise CrawlError('invalid_job_data') from exc
                         with writer_lock(self.workspace.root), Store(self.workspace.db) as store:
                             store.add(record)
-                    row.update(status='ok', record_id=record.record_id, resolved_url=final_url, title=record.title)
+                    row.update(status='ok', record_id=record.record_id, resolved_url=final_url, title=record.title,
+                               parser=record.parser, body_sha256=hashlib.sha256(record.text.encode('utf-8')).hexdigest(),
+                               adapter_version=getattr(adapter, 'version', 'custom'))
+                    identity = getattr(adapter, 'job_identity', None)
+                    if callable(identity):
+                        row['platform_job_id'] = identity(final_url)
                 except CrawlError as exc:
                     row['status'] = exc.code
                     self._save(state)
-                    if exc.code not in {'structure_changed','not_job_url','invalid_job_data'}:
+                    if exc.code not in {'structure_changed','not_job_url','invalid_job_data','job_identity_mismatch','jd_incomplete'}:
                         raise
                 self._save(state)
         finally:
@@ -715,7 +741,7 @@ class GuidedService:
             audit = {'schema_version': 1, 'task_id': state['id'],
                      'adapter': {'key': adapter.key, 'version': getattr(adapter, 'version', 'custom')},
                      'outcome': outcome, 'items': [
-                         {k: c.get(k, '') for k in ('id', 'url', 'resolved_url', 'status', 'record_id')}
+                         {k: c.get(k, '') for k in ('id', 'url', 'resolved_url', 'status', 'record_id', 'platform_job_id', 'parser', 'body_sha256', 'adapter_version')}
                          for c in state['cards'] if c['id'] in selected]}
             audit_path = report_root/'guided_acquisition.json'
             atomic_json(audit_path, audit)
@@ -747,7 +773,9 @@ class GuidedService:
         if action == 'login':
             # Save intent before open(): the native page itself can ask for
             # manual assistance and raise, but the original task must survive.
-            self._save(state, authentication='manual_pending')
+            watching = self._login_return.arm(state, backend)
+            self._save(state, authentication='manual_pending',
+                       login_continuation='watching' if watching else 'off')
             backend.open(adapter.login_url, authentication=True)
             self._save(state, 'manual_browser_open', status='waiting_manual', authentication='manual_pending')
         elif action in {'capture','more','search'}:
@@ -796,6 +824,10 @@ class GuidedService:
                 for backend in list(self._backends.values()):
                     try: backend.pump()
                     except Exception: pass
+                try:
+                    self._login_return.tick(self)
+                except Exception:
+                    pass  # Optional continuation must not terminate the worker.
                 continue
             try:
                 if action == 'install':

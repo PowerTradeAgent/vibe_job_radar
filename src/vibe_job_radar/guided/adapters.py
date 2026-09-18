@@ -144,16 +144,17 @@ class Registry:
 
 
 def builtins() -> Registry:
+    from .liepin import LiepinAdapter
     return Registry([
         DOMAdapter('boss', 'BOSS直聘', ('zhipin.com',),
                    'https://www.zhipin.com/web/geek/job', 'query', r'^/job_detail/[^/]+\.html$',
                    'https://www.zhipin.com/web/user/', ('www.zhipin.com',),
                    ('zhipin.com', 'zhipin.cn')),
-        DOMAdapter('liepin', '猎聘', ('liepin.com',),
+        LiepinAdapter('liepin', '猎聘', ('liepin.com',),
                    'https://www.liepin.com/zhaopin/', 'key',
                    r'^(?:/job/[^/]+\.(?:shtml|html)|/a/[0-9]+\.shtml|/lptjob/[0-9]+)$',
                    'https://www.liepin.com/', ('www.liepin.com', 'passport.liepin.com'),
-                   ('liepin.com', 'liepin.cn'), version='2'),
+                   ('liepin.com', 'liepin.cn'), version='3'),
         DOMAdapter('51job', '前程无忧', ('51job.com',),
                    'https://we.51job.com/pc/search', 'keyword', r'(?:/[^/]+/\d+\.html$|^/pc/jobdetail)',
                    'https://login.51job.com/', ('login.51job.com',),

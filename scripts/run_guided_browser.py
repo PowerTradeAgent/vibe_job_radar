@@ -37,6 +37,10 @@ class FixtureWire:
     def __init__(self,adapter,ledger,cancelled,progress):
         self.ledger,self.cancelled=ledger,cancelled
         self.blocked=set()
+        self.network_policy=None
+        self.progress=progress
+    def bind_policy(self, policy):
+        self.network_policy=policy
     def reserve(self,kind):
         if self.cancelled.is_set():raise CrawlError('paused')
         self.ledger.reserve('fixture',kind)
@@ -174,6 +178,61 @@ def main():
                 page.locator('#stop').click();expect(page.locator('#task-status')).to_contain_text('已停止',timeout=15000)
                 assert not server.guided.state()['jobs'][0]['browser_open']
                 result['checks'].append('credentials absent from disk/status; reload preserves results; stop revokes live browser session')
+                # Preserve the original manual-return journey above. A separate
+                # one-page task opts into local return observation; no login
+                # credentials or extra upstream endpoint are introduced.
+                form=page.locator('#search-form')
+                form.locator('[name=max_pages]').select_option('1')
+                form.locator('details:has(input[name=list_url]) > summary').click()
+                form.locator('[name=list_url]').fill('https://jobs.fixture.test/search')
+                form.locator('[name=rights_note]').fill('独立自动接续验收；仅人工站点，不是市场数据。')
+                form.locator('[name=consent]').check()
+                page.locator('#find').click()
+                expect(page.locator('#task-status')).to_contain_text('需要你操作',timeout=30000)
+                expect(page.locator('#auto-login-return')).not_to_be_checked()
+                page.locator('#auto-login-return').check()
+                page.locator('#login').click()
+                expect(page.locator('#login-return-status')).to_contain_text('原检索页',timeout=30000)
+                login_posts=CALLS.count(('POST','/login'))
+                MANUAL_LOGIN.set()
+                # No Capture/Resume click: two matching local DOM observations
+                # must enter the original service and render its actual cards.
+                expect(page.locator('#cards .card')).to_have_count(2,timeout=30000)
+                expect(page.locator('#login-return-status')).to_contain_text('已自动接回')
+                assert CALLS.count(('POST','/login'))==login_posts+1
+                page.locator('#cards input[type=checkbox]').first.check()
+                page.locator('#collect').click()
+                expect(page.locator('#result')).to_contain_text('已保存 1 个岗位',timeout=30000)
+                result['checks'].append('opt-in matching login return automatically reads the original list without Capture/Resume; selected detail enters the same report pipeline')
+                # A separate query explicitly reuses this still-open, now idle
+                # browser. Login count must not change and prior reports survive.
+                previous_id=page.locator('#task').input_value()
+                previous_backend=server.guided._backends[previous_id]
+                previous_report=server.guided._load(previous_id)['report_id']
+                login_posts=CALLS.count(('POST','/login'))
+                expect(form.locator('[name=reuse_current_session]')).not_to_be_checked()
+                form.locator('[name=reuse_current_session]').check()
+                form.locator('[name=keyword]').fill('时间序列算法新查询')
+                form.locator('[name=list_url]').fill('https://jobs.fixture.test/search?q=new-query')
+                page.locator('#find').click()
+                expect(page.locator('#session-reuse-status')).to_contain_text('已复用当前采集浏览器会话',timeout=30000)
+                expect(page.locator('#cards .card')).to_have_count(2,timeout=30000)
+                current_id=page.locator('#task').input_value()
+                assert current_id!=previous_id
+                assert server.guided._backends[current_id] is previous_backend
+                assert previous_id not in server.guided._backends
+                assert CALLS.count(('POST','/login'))==login_posts
+                assert server.guided._load(previous_id)['report_id']==previous_report
+                page.locator('#cards input[type=checkbox]').first.check()
+                page.locator('#collect').click()
+                expect(page.locator('#result')).to_contain_text('已保存 1 个岗位',timeout=30000)
+                assert server.guided._load(current_id)['report_id']!=previous_report
+                assert CALLS.count(('POST','/login'))==login_posts
+                result['checks'].append('new opted-in query reuses the same authenticated browser with no additional login; selected detail creates a separate report and prior report survives')
+                page.locator('#stop').click()
+                expect(page.locator('#task-status')).to_contain_text('已停止',timeout=15000)
+                assert current_id not in server.guided._backends
+
                 page.set_viewport_size({'width':390,'height':844})
                 page.screenshot(path=str(output/'guided-mobile.png'),full_page=True)
                 assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')

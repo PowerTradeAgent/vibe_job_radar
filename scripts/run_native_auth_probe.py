@@ -1,12 +1,14 @@
 """Metadata-only wrapper around the unchanged local native acceptance suite.
 
-No target URLs, headers, credentials, bodies or protocol error text are recorded.
+No target URLs, headers, credentials or bodies are recorded. Existing redacted
+component-startup reports are retained if initialization fails before tracing.
 This developer-only probe changes neither authentication nor request decisions.
 """
 from __future__ import annotations
 
 from collections import Counter
 import json
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 from unittest.mock import patch
@@ -33,12 +35,43 @@ class ObservedBackend(acceptance.NativeBackend):
         self.probe = {'sent': Counter(), 'acknowledged': Counter(), 'events': Counter(),
                       'attachments': Counter(), 'auth': Counter(), 'snapshots': []}
         PROBES.append(self.probe)
-        super().__init__(*args, **kwargs)
+        try:
+            super().__init__(*args, **kwargs)
+        except Exception as exc:
+            # Reuse the existing redacted component report, not raw protocol
+            # messages or browser traffic. Tests use only an artificial source.
+            report = getattr(exc, 'report', None)
+            if isinstance(report, dict):
+                self.probe['startup_diagnostic'] = report
+            raise
 
     def _attached(self, event):
-        kind = event.get('targetInfo', {}).get('type')
-        self.probe['attachments'][kind if kind in {'page', 'worker', 'iframe'} else 'other'] += 1
+        info = event.get('targetInfo', {})
+        kind = info.get('type')
+        kinds = {'page', 'worker', 'iframe', 'tab', 'browser', 'service_worker',
+                 'shared_worker', 'background_page', 'webview'}
+        kind = kind if kind in kinds else 'other'
+        self.probe['attachments'][kind] += 1
+        observations = self.probe.setdefault('attachment_order', [])
+        if len(observations) < 16:
+            observations.append({'kind': kind,
+                'application_context': self._target_in_context(info),
+                'creation_active': bool(self._page_creation),
+                'already_owned': info.get('targetId') in self._sessions.values(),
+                'has_opener': bool(info.get('openerId')),
+                'type_exact': info.get('type') if isinstance(info.get('type'), str) and len(info['type'])<40 else 'unknown',
+                'known_browser_ui': self._browser_chrome_ui(info),
+                'omnibox_url': info.get('url') if urlsplit(info.get('url', '')).scheme=='chrome' and urlsplit(info.get('url', '')).hostname=='omnibox-popup.top-chrome' and len(info.get('url', ''))<128 else None,
+                'blank': info.get('url', '') in ('', 'about:blank'),
+                'internal_scheme': urlsplit(info.get('url', '')).scheme if urlsplit(info.get('url', '')).scheme in {'chrome', 'chrome-extension', 'devtools', 'about'} else 'web_or_other',
+                'internal_host': urlsplit(info.get('url', '')).hostname if urlsplit(info.get('url', '')).scheme in {'chrome', 'devtools'} else None})
         return super()._attached(event)
+
+    def _fatal(self, code, error=None):
+        calls = self.probe.setdefault('fatal_sites', [])
+        if len(calls) < 8:
+            calls.append({'code': code, 'caller': sys._getframe(1).f_code.co_name})
+        return super()._fatal(code, error)
 
     def _send(self, session, method, params=None, callback=None):
         key = method if method in COMMANDS else 'other'
