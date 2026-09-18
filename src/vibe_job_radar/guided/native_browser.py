@@ -264,6 +264,15 @@ class NativeBackend(PlaywrightBackend):
                 return
             raise
 
+    @staticmethod
+    def _browser_chrome_ui(info):
+        # Observed in Chrome153 headed startup: this is the address-bar UI,
+        # not a web page or collection popup. Never generalize to all 'other'
+        # targets, extensions or chrome:// pages.
+        return (info.get('type') == 'other' and not info.get('openerId')
+                and info.get('url') in {'chrome://omnibox-popup.top-chrome',
+                                        'chrome://omnibox-popup.top-chrome/'})
+
     def _target_in_context(self, info):
         expected = getattr(self, '_context_id', None)
         return expected is None or info.get('browserContextId') == expected
@@ -276,6 +285,11 @@ class NativeBackend(PlaywrightBackend):
             # Chromium can emit an initial default-context blank target. It is
             # not a page of our isolated collection context. Release only this
             # automatic debugger attachment; do not cancel the collection.
+            self._cdp.send('Target.detachFromTarget', {'sessionId': session})
+            return
+        if self._browser_chrome_ui(info):
+            # Detach our automatic debugger only. Do not initialize request
+            # controls, send credentials, navigate or close browser UI.
             self._cdp.send('Target.detachFromTarget', {'sessionId': session})
             return
         if (info['type'] != 'page' or len(self._sessions) >= 8
@@ -384,8 +398,11 @@ class NativeBackend(PlaywrightBackend):
                 return
             method, data = message.get('method'), message.get('params', {})
             if method == 'Target.attachedToTarget':
-                # Dedicated/shared workers and OOPIFs are unsupported surfaces.
-                self._reject_target(data['targetInfo']['targetId'])
+                if self._browser_chrome_ui(data['targetInfo']):
+                    self._send(session, 'Target.detachFromTarget', {'sessionId': data['sessionId']})
+                else:
+                    # Dedicated/shared workers and OOPIFs remain unsupported.
+                    self._reject_target(data['targetInfo']['targetId'])
             elif method == 'Fetch.requestPaused':
                 self._paused(session, data)
             elif method == 'Fetch.authRequired':
