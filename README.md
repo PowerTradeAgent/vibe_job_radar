@@ -92,3 +92,7 @@ python scripts/run_guided_browser.py
 ### 维护者：源码绑定验收
 
 构建候选前运行 `python scripts/verify_candidate.py`，再运行 `python scripts/build_candidate.py`。只有与当前源码一致且四项本地检查全部通过的证据才能构建；这不是普通用户查询岗位的前置步骤，也不证明实际 VPN/招聘站点认证。详见 [源码验收说明](docs/SOURCE_QUALIFICATION.md) 与 [当前交付清单](docs/DELIVERY_STATUS.md)。
+
+### 原生浏览器实验（D02 / #48）
+
+新建任务可显式选择原生实验并确认范围，旧HTTP桥仍默认。页面HTTP/TLS由浏览器完成，经过只透明转发加密字节的本机公网目标CONNECT守卫；不是Python重发页面。当前仅猎聘主站bootstrap契约，真实业务API/跨域依赖尚待逐站核实，BOSS/51job未启用native；不能把开关出现当成三站取数成功。详见[实现与限制](docs/NATIVE_BROWSER_D02.md)。

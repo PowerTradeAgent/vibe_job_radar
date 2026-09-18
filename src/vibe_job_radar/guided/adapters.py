@@ -40,6 +40,7 @@ class DOMAdapter:
                                       'a:has-text("下一页")')
     version: str = '1'
     certification: str = 'not_live_verified'
+    native_contract: object = None  # Optional trusted-code contract; never accepted from the UI.
 
     def search_url(self, keyword: str) -> str:
         keyword = keyword.strip()

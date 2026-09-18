@@ -1,0 +1,43 @@
+name: native-browser-acceptance
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  native-http:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install developer-only native browser tools
+        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "cryptography>=43"
+      - name: Install Chromium and isolated test trust tooling
+        if: runner.os == 'Linux'
+        run: |
+          python -m playwright install --with-deps chromium
+          sudo apt-get install -y libnss3-tools
+      - name: Verify native Chromium with artificial local TLS source
+        if: runner.os == 'Linux'
+        run: python scripts/run_native_browser_acceptance.py --controlled
+      - name: Verify installed Edge with artificial local TLS source
+        if: runner.os == 'Windows'
+        run: python scripts/run_native_browser_acceptance.py --controlled --channel msedge
+      - name: Preserve native evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-browser-${{ runner.os }}
+          retention-days: 7
+          path: browser-acceptance/native/

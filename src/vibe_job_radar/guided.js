@@ -48,12 +48,12 @@ function render(){
     }else sticky='目标链接无效，未按该链接创建任务或访问平台。';
   }
 }
- $('limits').textContent=`服务端硬限制：页面导航至少 ${state.limits.page_interval} 秒，最多 ${state.limits.pages_hour} 次/小时；经桥接的 HTTP 请求至少 ${state.limits.request_interval} 秒，最多 ${state.limits.requests_hour} 次/小时。不同任务共享配额，不能从界面提高。`;
+ $('limits').textContent=`服务端硬限制：页面导航至少 ${state.limits.page_interval} 秒，最多 ${state.limits.pages_hour} 次/小时；桥接或原生已计量的 HTTP 请求至少 ${state.limits.request_interval} 秒，最多 ${state.limits.requests_hour} 次/小时。不同任务共享配额，不能从界面提高。`;
  options($('task'),state.jobs.map(j=>[j.id,`${j.platform} · ${j.keyword} · ${statusNames[j.status]||j.status}`]));
  if(requestedTask&&state.jobs.some(j=>j.id===requestedTask)){$('task').value=requestedTask;requestedTask='';}
  current=state.jobs.find(j=>j.id===$('task').value)||null;
  if(current&&loadedId!==current.id){selecting=new Set(current.selection||[]);loadedId=current.id;}
- if(current){$('resume').textContent=current.authentication==='manual_pending'?'登录完成，继续原任务':'继续原任务';$('task-status').textContent=`${statusNames[current.status]||current.status}：${current.message}`;
+ if(current){$('resume').textContent=current.authentication==='manual_pending'?'登录完成，继续原任务':'继续原任务';$('task-status').textContent=`${current.backend==='native'?'原生网络实验':'原有HTTP桥'} · ${statusNames[current.status]||current.status}：${current.message}`;
  if(current.code==='non_public_address'||current.code==='dns_error'||current.code?.startsWith('encrypted_dns_')){
  $('task-status').textContent+='\n此页面请求由本程序在网络校验阶段中止；采集浏览器可能显示 ERR_BLOCKED_BY_CLIENT。它不等于平台封禁或 Edge 自身拒绝。请检查同一平台的当前网络策略；旧任务错误与新诊断不是同一次请求。';
  }
@@ -75,7 +75,7 @@ function render(){
 function renderCards(){const root=$('cards');root.replaceChildren();if(!current.cards.length){root.textContent='还没有岗位清单。完成搜索或人工登录后，点击“读取当前列表”。';return;}
  current.cards.forEach(c=>{const box=document.createElement('div');box.className='card';const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.checked=selecting.has(c.id);input.addEventListener('change',()=>{if(input.checked)selecting.add(c.id);else selecting.delete(c.id);});label.append(input,document.createTextNode(' '+c.title));const source=document.createElement('small');source.textContent='列表观察到的链接：'+c.url;const outcome=document.createElement('small');outcome.textContent='结果：'+(cardStatus[c.status]||c.status)+(c.resolved_url?' · 详情真实地址：'+c.resolved_url:'');box.append(label,source,outcome);root.append(box);});}
 async function refresh(){state=await api('/api/guided/state');render();}
-$('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(async()=>{const data=Object.fromEntries(new FormData(f));data.roles=[data.role];delete data.role;data.max_pages=Number(data.max_pages);data.max_jobs=Number(data.max_jobs);data.consent=f.elements.consent.checked;data.diagnostics=f.elements.diagnostics.checked;const r=await api('/api/guided/create',data);loadedId='';await refresh();$('task').value=r.id;render();});});
+$('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(async()=>{const data=Object.fromEntries(new FormData(f));data.roles=[data.role];delete data.role;data.max_pages=Number(data.max_pages);data.max_jobs=Number(data.max_jobs);data.consent=f.elements.consent.checked;data.diagnostics=f.elements.diagnostics.checked;data.native_consent=f.elements.native_consent.checked;const r=await api('/api/guided/create',data);loadedId='';await refresh();$('task').value=r.id;render();});});
 $('task').addEventListener('change',()=>{loadedId='';render();});
 for(const [button,action] of Object.entries({'login':'login','capture':'capture','search-again':'search','pause':'pause','resume':'resume','stop':'stop'}))$(button).addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action})));
 $('collect').addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action:'collect',selected:[...selecting]})));
@@ -129,3 +129,9 @@ $('download-acquisition-trace').addEventListener('click',()=>act(async()=>{
  setTimeout(()=>URL.revokeObjectURL(u),1000);
 }));
 $('task').addEventListener('change',()=>{tracePreview=null;$('acquisition-trace').textContent='任务已切换，请重新预览。';});
+
+$('acquisition-backend').addEventListener('change',()=>{
+ const native=$('acquisition-backend').value==='native';
+ $('search-form').elements.native_consent.required=native;
+ if(!native)$('search-form').elements.native_consent.checked=false;
+});
