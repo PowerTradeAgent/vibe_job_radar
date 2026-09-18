@@ -45,7 +45,7 @@ from vibe_job_radar.workspace import Workspace
 
 
 @contextmanager
-def trust_fixture(root):
+def trust_fixture(root, extra_hosts=()):
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes,serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
@@ -62,7 +62,7 @@ def trust_fixture(root):
           .issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number())
           .not_valid_before(now-timedelta(days=1)).not_valid_after(now+timedelta(days=1))
           .add_extension(x509.BasicConstraints(ca=False,path_length=None),critical=True)
-          .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]),critical=False)
+          .add_extension(x509.SubjectAlternativeName([x509.DNSName(h) for h in (host, *(extra_hosts if host == HOST else ()))]),critical=False)
           .sign(key,hashes.SHA256()))
         file.write_bytes(cert.public_bytes(serialization.Encoding.PEM)+key.private_bytes(
             serialization.Encoding.PEM,serialization.PrivateFormat.TraditionalOpenSSL,serialization.NoEncryption()))

@@ -61,7 +61,9 @@ MESSAGES = {
     'opening': '正在打开站内搜索；浏览器可能弹出。无需复制职位链接。',
     'reading': '正在读取当前列表并识别具体岗位链接。',
     'ready': '岗位已列出。勾选要研究的岗位，再点击“采集所选并生成报告”。',
-    'empty_list': '没有识别到岗位链接。请在采集浏览器完成搜索/登录，再点“读取当前列表”。',
+    'empty_list': '没有识别到岗位数据。可能是页面未加载或适配未完成，并不证明缺少登录；请核对采集浏览器与错误原因。',
+    'no_matching_jobs': '搜索业务响应已明确返回零条岗位。本次无需为零结果重新登录；可调整检索条件。',
+    'liepin_search_query_mismatch': '搜索请求与当前关键词或筛选条件不一致，未将其他查询的岗位混入本批。',
     'manual_required': '需要你操作采集浏览器：完成登录/验证或打开搜索结果，然后回这里读取当前列表。',
     'manual_browser_open': '已打开平台登录页面。请在采集浏览器正常登录；完成后点击“登录完成，继续原任务”，无需重新填写检索条件。',
     'collecting': '正在按强制频次依次打开选中岗位，真实详情链接会自动保留。',
@@ -704,6 +706,10 @@ class GuidedService:
                 if not cards:
                     notify(self._trace_for(state), 'note', code='no_cards')
             if not cards:
+                if getattr(adapter, 'confirmed_empty', lambda _: False)(page):
+                    self._save(state, 'no_matching_jobs', status='ready', phase='select',
+                               last_list_url=page.url, list_end='confirmed_empty')
+                    return
                 self._save(state, 'empty_list', status='waiting_manual', phase='select',
                            last_list_url=page.url)
                 return

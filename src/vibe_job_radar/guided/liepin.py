@@ -275,7 +275,22 @@ class LiepinAdapter(DOMAdapter):
         # variants: persisted page signatures and selections depend on them.
         # Entity-level cross-page/task deduplication belongs to D05, not a silent
         # migration during detail-parser rollout.
-        return super().cards(page)
+        if self.challenged(plain_text(page.html), page.url):
+            raise CrawlError('manual_required')
+        from .liepin_search import observed_cards
+        observed = observed_cards(self, page)
+        return observed if observed is not None else super().cards(page)
+
+    def native_request_context(self, operation, request, page_url):
+        from .liepin_search import request_context
+        return request_context(self, operation, request, page_url)
+
+    def native_ready(self, observations):
+        return any(o.operation == 'liepin_search' for o in observations)
+
+    def confirmed_empty(self, page):
+        from .liepin_search import observed_cards
+        return observed_cards(self, page) == []
 
     def validate_detail_identity(self, expected_url: str, page: PageSnapshot) -> None:
         expected = self.job_identity(expected_url)
