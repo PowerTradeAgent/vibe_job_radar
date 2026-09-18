@@ -47,3 +47,7 @@ https://chromedevtools.github.io/devtools-protocol/tot/Fetch/
 `scripts/run_native_liepin_search.py --controlled` 使用三个自有人工HTTPS源，真正的Chromium/Edge原生后端、CORS、API-only无链接页面、实际LiepinAdapter及原报告；它不是实站采集。原四组原生反例/全套UI及单测保持；同一提交结果需单独核验。
 
 现有规则加载、TLS、公网目标检查、共享配额、停止控制保留。当前仍要求主站和业务源的robots可确认；实际资源/响应变化可能继续阻塞，不能标成live_verified。不修改其他两站、不增加后台调度。回滚本增量不删除任何岗位、报告或已保存会话；#49和#50真实目标保持开放。
+
+## 跨域浏览器实现注意
+
+Playwright Chromium 的请求路由会自动合成部分 OPTIONS 成功响应。当前有CORS规则的原生上下文不使用该路由层，直接用CDP控制；未支持目标先取消并安装只阻断的Fetch控制，再由原工作循环关闭，不发送凭据或继续目标。没有CORS的旧契约保留原归属门。必须实测来源收到OPTIONS、来源拒绝时不发POST，以及弹窗首请求未越界；不能仅以函数单测宣称通过。依据：microsoft/playwright `packages/playwright-core/src/server/chromium/crNetworkManager.ts` 的 `isInterceptedOptionsPreflight` 逻辑。

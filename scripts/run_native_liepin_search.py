@@ -34,6 +34,7 @@ ASSET = '/fe-www-pc/v6/js/search-fixture.js'
 class SearchFixture:
     def __init__(self, root):
         self.requests = []
+        self.deny_cors = False
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -74,7 +75,7 @@ fetch('https://""" + API_HOST + PATH + """', {
             def do_OPTIONS(self):
                 self.record()
                 if urlsplit(self.path).path != PATH: self.send('unknown', status=405)
-                else: self.send('', status=204)
+                else: self.send('', status=403 if owner.deny_cors else 204)
             def do_POST(self):
                 self.record()
                 if self.path != PATH: self.send('unknown', status=405); return
@@ -159,6 +160,8 @@ def main():
                     assert any(r['method']=='OPTIONS' and r['host']==API_HOST for r in server.requests), 'preflight not observed at upstream'
                     assert any(r['method']=='POST' and r['host']==API_HOST for r in server.requests)
                     assert any(r['host']==CDN_HOST and r['path']==ASSET for r in server.requests)
+                    native = service._backends[task['id']]
+                    assert native.native_counts['business']==2, 'POST and preflight must both be accounted'
                     result['checks'].append('native CDN script and cross-origin preflight/search POST supply a candidate without DOM links or login')
                     service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]}); task=wait(service)
                     assert task['status']=='completed' and task['outcome']['saved']==1,task.get('code')
@@ -176,6 +179,30 @@ def main():
                     assert not any('login' in r['path'] or 'apply' in r['path'] for r in server.requests)
                     result['checks'].append('anonymous read sends no login request or credentials; application identity retained')
                     service.close(); services.clear()
+                    # Independent owned thread and fresh native context: a
+                    # browser-generated popup must not leak even its first HTTP.
+                    b = factory(local, RateLedger(root/'popup.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
+                    try:
+                        b.open(local.search_url('时间序列'))
+                        b.page.evaluate("() => {window.open('/apply'); window.open('/apply', '_blank', 'noopener');}")
+                        b.pump()
+                        assert len(b.context.pages)==1, 'uncontrolled popup remains'
+                        assert not any(r['path']=='/apply' for r in server.requests), 'popup first request escaped'
+                    finally: b.close()
+                    result['checks'].append('CORS context still blocks initial popup HTTP without Playwright synthetic preflight')
+                    # A real publisher rejection must prevent the POST rather
+                    # than getting replaced by a driver-generated success.
+                    before = sum(r['method']=='POST' for r in server.requests)
+                    server.deny_cors = True
+                    b = factory(local, RateLedger(root/'cors-denied.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
+                    try:
+                        try: b.open(local.search_url('时间序列'))
+                        except Exception as exc:
+                            assert getattr(exc, 'code', None)=='http_403', getattr(exc, 'code', None)
+                        else: raise AssertionError('publisher preflight denial accepted')
+                    finally: b.close()
+                    assert sum(r['method']=='POST' for r in server.requests)==before
+                    result['checks'].append('publisher OPTIONS denial prevents search POST and is not fabricated as success')
                     result['success']=True
     finally:
         for service in services: service.close()

@@ -96,7 +96,13 @@ class NativeBackend(PlaywrightBackend):
     def _configure_context(self):
         # Install before any page is created. Target debugger pause does not
         # alone prevent the browser's initial popup network request.
-        self.context.route('**/*', self._ownership_route)
+        self._native_cors = any(rule.cors_origin for rule in self.contract.rules)
+        # Playwright's route layer auto-fulfills CORS OPTIONS. For reviewed
+        # CORS contracts use direct CDP controls, so the publisher really
+        # receives and decides preflight. Unsupported targets get an abort-only
+        # Fetch guard before their deferred close, never collection controls.
+        if not self._native_cors:
+            self.context.route('**/*', self._ownership_route)
         self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._page_created)
         self._cdp = self.browser.new_browser_cdp_session()
@@ -169,6 +175,9 @@ class NativeBackend(PlaywrightBackend):
             return
         rejected.add(target)
         self.__dict__.setdefault('_pending_rejected_targets', []).append(target)
+        if self.__dict__.get('_native_cors', False):
+            from .native_cors import quarantine_target
+            quarantine_target(self, target)
 
     def _drain_rejected_pages(self):
         # Called outside target/page events. Our controller sends no resume
