@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 from unittest.mock import patch
@@ -58,10 +59,19 @@ class ObservedBackend(acceptance.NativeBackend):
                 'creation_active': bool(self._page_creation),
                 'already_owned': info.get('targetId') in self._sessions.values(),
                 'has_opener': bool(info.get('openerId')),
+                'type_exact': info.get('type') if isinstance(info.get('type'), str) and len(info['type'])<40 else 'unknown',
+                'known_browser_ui': self._browser_chrome_ui(info),
+                'omnibox_url': info.get('url') if urlsplit(info.get('url', '')).scheme=='chrome' and urlsplit(info.get('url', '')).hostname=='omnibox-popup.top-chrome' and len(info.get('url', ''))<128 else None,
                 'blank': info.get('url', '') in ('', 'about:blank'),
                 'internal_scheme': urlsplit(info.get('url', '')).scheme if urlsplit(info.get('url', '')).scheme in {'chrome', 'chrome-extension', 'devtools', 'about'} else 'web_or_other',
                 'internal_host': urlsplit(info.get('url', '')).hostname if urlsplit(info.get('url', '')).scheme in {'chrome', 'devtools'} else None})
         return super()._attached(event)
+
+    def _fatal(self, code, error=None):
+        calls = self.probe.setdefault('fatal_sites', [])
+        if len(calls) < 8:
+            calls.append({'code': code, 'caller': sys._getframe(1).f_code.co_name})
+        return super()._fatal(code, error)
 
     def _send(self, session, method, params=None, callback=None):
         key = method if method in COMMANDS else 'other'
