@@ -40,6 +40,9 @@ jobs:
         run: xvfb-run -a python scripts/run_native_auth_probe.py --controlled --headed
       - name: Verify installed Edge with artificial local TLS source
         if: always() && runner.os == 'Windows'
+        # Bound this test step so a stalled browser still leaves its checkpoint
+        # and stack dump for the always() artifact step; failure remains fatal.
+        timeout-minutes: 3
         run: python scripts/run_native_auth_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Preserve native evidence including failures
         if: always()
