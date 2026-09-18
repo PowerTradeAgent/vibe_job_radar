@@ -45,8 +45,20 @@ class ObservedBackend(acceptance.NativeBackend):
             raise
 
     def _attached(self, event):
-        kind = event.get('targetInfo', {}).get('type')
-        self.probe['attachments'][kind if kind in {'page', 'worker', 'iframe'} else 'other'] += 1
+        info = event.get('targetInfo', {})
+        kind = info.get('type')
+        kinds = {'page', 'worker', 'iframe', 'tab', 'browser', 'service_worker',
+                 'shared_worker', 'background_page', 'webview'}
+        kind = kind if kind in kinds else 'other'
+        self.probe['attachments'][kind] += 1
+        observations = self.probe.setdefault('attachment_order', [])
+        if len(observations) < 16:
+            observations.append({'kind': kind,
+                'application_context': self._target_in_context(info),
+                'creation_active': bool(self._page_creation),
+                'already_owned': info.get('targetId') in self._sessions.values(),
+                'has_opener': bool(info.get('openerId')),
+                'blank': info.get('url', '') in ('', 'about:blank')})
         return super()._attached(event)
 
     def _send(self, session, method, params=None, callback=None):
