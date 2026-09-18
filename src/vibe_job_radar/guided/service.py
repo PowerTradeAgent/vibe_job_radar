@@ -31,6 +31,7 @@ from .browser import PlaywrightBackend
 from .contracts import CrawlError
 from .rate import RateLedger, RateLimit
 from .transport import diagnose_host
+from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
                              failed_report, probe_browser, safe_text, package_version)
 from .browser_install import install_commands, run_command
@@ -123,6 +124,7 @@ class GuidedService:
         self._active = None
         self._stop_ident = None
         self._backends = {}
+        self._traces = {}  # Bounded in-memory metadata; no automatic disk export.
         self._thread = None
         self._last_install = 'not_started'
         self._restart_required = False
@@ -216,6 +218,8 @@ class GuidedService:
 
     def create(self, data):
         adapter = self.registry.get(data.get('platform'))
+        if type(data.get('diagnostics', False)) is not bool:
+            raise InputError('诊断选项必须为布尔值。')
         keyword = text_field(data, 'keyword', required=True, limit=100).strip()
         roles = data.get('roles', ['time_series'])
         if not isinstance(roles, list) or not roles or any(not isinstance(r,str) or r not in self.workspace.config['roles'] for r in roles):
@@ -234,7 +238,8 @@ class GuidedService:
                  'rights_note': rights, 'search_url': seed or adapter.search_url(keyword),
                  'status': 'queued', 'code': 'new', 'cards': [], 'pages_seen': [], 'report_id': '',
                  'phase': 'search', 'selection': [], 'created_at': utc_now(), 'updated_at': utc_now(),
-                 'authentication': 'not_checked', 'certification': 'not_live_verified'}
+                 'authentication': 'not_checked', 'certification': 'not_live_verified',
+                 'diagnostics_enabled': data.get('diagnostics', False)}
         with self._lock:
             if self._busy:
                 raise InputError('已有任务运行，请先暂停。')
@@ -451,6 +456,46 @@ class GuidedService:
         return {'id': state['id'], 'urls': [c.get('resolved_url') or c['url'] for c in state['cards']],
                 'source': 'observed links; not a proof of complete market coverage'}
 
+    def _trace_for(self, state):
+        # Called on the owning worker, and by the authenticated local preview.
+        # Instrumentation availability must not affect collection decisions.
+        try:
+            with self._lock:
+                if state.get('diagnostics_enabled') is not True:
+                    return None
+                ident = state['id']
+                if ident not in self._traces:
+                    while len(self._traces) >= 30:
+                        self._traces.pop(next(iter(self._traces))).disable()
+                    adapter = self.registry.get(state['platform'])
+                    self._traces[ident] = DiagnosticTrace(ident, adapter.key,
+                        adapter_version=getattr(adapter, 'version', 'unknown'), browser=self._selected_browser)
+                return self._traces[ident]
+        except Exception:
+            return None
+
+    def diagnostics(self, data):
+        """Authenticated local metadata preview; never a new site request."""
+        if set(data) - {'id', 'enabled'}:
+            raise InputError('诊断只接受任务编号和启用选项。')
+        with self._lock:
+            state = self._load(data.get('id'))
+            if 'enabled' in data:
+                if type(data['enabled']) is not bool:
+                    raise InputError('诊断选项必须为布尔值。')
+                if self._busy:
+                    raise InputError('请先暂停或等待当前动作结束，再更改诊断选项。')
+                if not data['enabled']:
+                    trace = self._traces.pop(state['id'], None)
+                    if trace:
+                        trace.disable()
+                self._save(state, diagnostics_enabled=data['enabled'])
+            trace = self._trace_for(state)
+            return trace.snapshot() if trace is not None else {
+                'schema_version': 1, 'trace_id': state['id'], 'enabled': False,
+                'events': [], 'scope': '诊断未启用或不可用；没有读取浏览器、联网或导出任务正文。'}
+
+    @traced('browser_session', 'service', state_index=0)
     def _backend(self, state):
         if self._restart_required:
             raise BrowserStartupError(self._restart_report())
@@ -473,8 +518,16 @@ class GuidedService:
                 with self._lock:
                     self._browser_health = dict(health)
                     self._remember_check(health, self._selected_browser)
-        return self._backends[ident]
+        backend = self._backends[ident]
+        bind = getattr(backend, 'bind_diagnostics', None)
+        if callable(bind):
+            try:
+                bind(self._trace_for(state))
+            except Exception:
+                pass  # Diagnostics must not affect a third-party backend.
+        return backend
 
+    @traced('listing', 'service', state_index=0)
     def _gather(self, state, backend, adapter, *, navigate=False, more=False):
         if navigate:
             backend.open(state['search_url'])
@@ -495,7 +548,10 @@ class GuidedService:
             page = backend.snapshot()
             if hasattr(backend, 'wire'):
                 backend.wire.ensure_robots(page.url)
-            cards = adapter.cards(page)
+            with observe(self._trace_for(state), 'list_parse', url=page.url):
+                cards = adapter.cards(page)
+                if not cards:
+                    notify(self._trace_for(state), 'note', code='no_cards')
             if not cards:
                 self._save(state, 'empty_list', status='waiting_manual', phase='select',
                            last_list_url=page.url)
@@ -517,6 +573,7 @@ class GuidedService:
                 break
         self._save(state, 'ready' if state['cards'] else 'empty_list', status='ready' if state['cards'] else 'waiting_manual', phase='select')
 
+    @traced('collection', 'service', state_index=0)
     def _collect(self, state, backend, adapter):
         self._save(state, 'collecting', status='running', phase='collect')
         selected = set(state['selection'])
@@ -529,18 +586,23 @@ class GuidedService:
                 row['status'] = 'opening'
                 self._save(state)
                 try:
-                    page = backend.open(row['url'])
-                    final_url = adapter.accept_url(page.url, detail=True)
-                    parsed = adapter.detail(page)
-                    try:
-                        record = JobRecord(**parsed, url=final_url, platform=adapter.key,
-                            source_mode='browser_fetch', rights_note=state['rights_note'],
-                            source_ref=f"guided:{state['id']}:{row['id']}",
-                            raw_sha256=hashlib.sha256(page.html.encode()).hexdigest())
-                    except (TypeError, ValueError) as exc:
-                        raise CrawlError('invalid_job_data') from exc
-                    with writer_lock(self.workspace.root), Store(self.workspace.db) as store:
-                        store.add(record)
+                    trace = self._trace_for(state)
+                    with observe(trace, 'detail_navigation', url=row['url'], entity=row['id']):
+                        page = backend.open(row['url'])
+                    with observe(trace, 'detail_identity', url=page.url, entity=row['id']):
+                        final_url = adapter.accept_url(page.url, detail=True)
+                    with observe(trace, 'detail_parse', url=page.url, entity=row['id']):
+                        parsed = adapter.detail(page)
+                    with observe(trace, 'persist', entity=row['id']):
+                        try:
+                            record = JobRecord(**parsed, url=final_url, platform=adapter.key,
+                                source_mode='browser_fetch', rights_note=state['rights_note'],
+                                source_ref=f"guided:{state['id']}:{row['id']}",
+                                raw_sha256=hashlib.sha256(page.html.encode()).hexdigest())
+                        except (TypeError, ValueError) as exc:
+                            raise CrawlError('invalid_job_data') from exc
+                        with writer_lock(self.workspace.root), Store(self.workspace.db) as store:
+                            store.add(record)
                     row.update(status='ok', record_id=record.record_id, resolved_url=final_url, title=record.title)
                 except CrawlError as exc:
                     row['status'] = exc.code
@@ -581,9 +643,11 @@ class GuidedService:
                 'target_jobs': target_jobs, 'ai_jobs': ai_jobs,
                 'scope': 'selected batch only; saved is not target match or live-site certification'}
 
+    @traced('report', 'service', state_index=0)
     def _finalize_report(self, state, adapter):
         selected = set(state['selection'])
         if not any(c['status']=='ok' and c['id'] in selected for c in state['cards']):
+            notify(self._trace_for(state), 'note', code='no_records')
             self._save(state, outcome=self._outcome(state), report_id='')
             return
         from ..pipeline import analyze
@@ -617,6 +681,7 @@ class GuidedService:
         self._save(state, report_id=report_id, outcome=outcome,
                    report_scope='exact successful selected records in this batch')
 
+    @traced('task', 'service', state_index=1)
     def _run(self, action, state, secret):
         if action == 'close':
             backend = self._backends.pop(state['id'],None)
@@ -700,7 +765,9 @@ class GuidedService:
                     continue
                 state = self._load(ident)
                 from ..network_policy import use_policy
-                with use_policy(self.workspace.network_policy()):
+                with observe(self._trace_for(state), 'network_policy'):
+                    policy = self.workspace.network_policy()
+                with use_policy(policy):
                     self._run(action,state,secret)
                 if state['status'] in {'completed','stopped','paused','ready'}:
                     self._cancel.set()

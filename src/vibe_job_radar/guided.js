@@ -75,7 +75,7 @@ function render(){
 function renderCards(){const root=$('cards');root.replaceChildren();if(!current.cards.length){root.textContent='还没有岗位清单。完成搜索或人工登录后，点击“读取当前列表”。';return;}
  current.cards.forEach(c=>{const box=document.createElement('div');box.className='card';const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.checked=selecting.has(c.id);input.addEventListener('change',()=>{if(input.checked)selecting.add(c.id);else selecting.delete(c.id);});label.append(input,document.createTextNode(' '+c.title));const source=document.createElement('small');source.textContent='列表观察到的链接：'+c.url;const outcome=document.createElement('small');outcome.textContent='结果：'+(cardStatus[c.status]||c.status)+(c.resolved_url?' · 详情真实地址：'+c.resolved_url:'');box.append(label,source,outcome);root.append(box);});}
 async function refresh(){state=await api('/api/guided/state');render();}
-$('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(async()=>{const data=Object.fromEntries(new FormData(f));data.roles=[data.role];delete data.role;data.max_pages=Number(data.max_pages);data.max_jobs=Number(data.max_jobs);data.consent=f.elements.consent.checked;const r=await api('/api/guided/create',data);loadedId='';await refresh();$('task').value=r.id;render();});});
+$('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(async()=>{const data=Object.fromEntries(new FormData(f));data.roles=[data.role];delete data.role;data.max_pages=Number(data.max_pages);data.max_jobs=Number(data.max_jobs);data.consent=f.elements.consent.checked;data.diagnostics=f.elements.diagnostics.checked;const r=await api('/api/guided/create',data);loadedId='';await refresh();$('task').value=r.id;render();});});
 $('task').addEventListener('change',()=>{loadedId='';render();});
 for(const [button,action] of Object.entries({'login':'login','capture':'capture','search-again':'search','pause':'pause','resume':'resume','stop':'stop'}))$(button).addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action})));
 $('collect').addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action:'collect',selected:[...selecting]})));
@@ -107,3 +107,25 @@ if(!token)note('请从启动终端的完整令牌地址打开基础工作台，�
 setInterval(()=>{if(token&&!requesting)refresh().catch(()=>{});},2000);
 
 async function downloadReport(id,file){const r=await fetch(`/api/download/${id}/${file}`,{headers:{'X-Radar-Token':token},cache:'no-store'});if(!r.ok)throw Error('下载失败，请查看报告是否完整。');const u=URL.createObjectURL(await r.blob());const a=document.createElement('a');a.href=u;a.download=file;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
+
+// Explicit snapshot and download only; never export the full task/audit object.
+let tracePreview=null;
+$('enable-acquisition-trace').addEventListener('click',()=>act(async()=>{
+ const r=await api('/api/guided/diagnostics',{id:active(),enabled:true});
+ tracePreview=null;$('acquisition-trace').textContent=r.enabled?'诊断已启用。继续正常任务后再预览；没有自动发起采集。':'诊断未启用。';
+}));
+$('preview-acquisition-trace').addEventListener('click',()=>act(async()=>{
+ const id=active();const r=await api('/api/guided/diagnostics',{id});
+ tracePreview={id,data:r};$('acquisition-trace').textContent=JSON.stringify(r,null,2);
+}));
+$('disable-acquisition-trace').addEventListener('click',()=>act(async()=>{
+ await api('/api/guided/diagnostics',{id:active(),enabled:false});
+ tracePreview=null;$('acquisition-trace').textContent='本任务诊断已关闭并清除；未删除岗位、报告或配额。';
+}));
+$('download-acquisition-trace').addEventListener('click',()=>act(async()=>{
+ if(!tracePreview||tracePreview.id!==active())throw Error('请先预览当前任务诊断。');
+ const u=URL.createObjectURL(new Blob([JSON.stringify(tracePreview.data,null,2)],{type:'application/json;charset=utf-8'}));
+ const a=document.createElement('a');a.href=u;a.download='acquisition-diagnostic.json';a.click();
+ setTimeout(()=>URL.revokeObjectURL(u),1000);
+}));
+$('task').addEventListener('change',()=>{tracePreview=null;$('acquisition-trace').textContent='任务已切换，请重新预览。';});

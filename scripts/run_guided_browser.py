@@ -114,11 +114,14 @@ def main():
                 form=page.locator('#search-form')
                 form.locator('[name=max_pages]').select_option('2')
                 form.locator('[name=rights_note]').fill('人工测试数据，仅用于自动验收，不是市场数据。')
+                form.locator('[name=diagnostics]').check()
                 form.locator('[name=consent]').check();page.locator('#find').click()
                 expect(page.locator('#task-status')).to_contain_text('需要你操作',timeout=30000)
                 result['checks'].append('anonymous search yields manual assistance, not false success')
                 page.locator('#login').click()
                 expect(page.locator('#task-status')).to_contain_text('已打开平台登录页面',timeout=30000)
+                login_trace=server.guided.diagnostics({'id':server.guided.state()['jobs'][0]['id']})
+                assert 'login' in {event['stage'] for event in login_trace['events']}
                 MANUAL_LOGIN.set()
                 deadline=time.monotonic()+20
                 while CALLS.count(('POST','/login'))!=1 and time.monotonic()<deadline:
@@ -146,6 +149,23 @@ def main():
                 download.value.save_as(output/'fixture-urls.txt')
                 assert '/job/1-final' in (output/'fixture-urls.txt').read_text(encoding='utf-8')
                 result['checks'].append('observed/resolved URLs exported instead of manually prepared by user')
+                before_diagnostic = len(CALLS)
+                page.locator('#preview-acquisition-trace').click()
+                expect(page.locator('#acquisition-trace')).to_contain_text('trace_id')
+                with page.expect_download() as diagnostic_download:
+                    page.locator('#download-acquisition-trace').click()
+                diagnostic_download.value.save_as(output/'acquisition-diagnostic.json')
+                diagnostic=json.loads((output/'acquisition-diagnostic.json').read_text(encoding='utf-8'))
+                assert diagnostic['trace_id']==job['id'] and diagnostic['enabled']
+                assert {'detail_parse','persist','report'} <= {e['stage'] for e in diagnostic['events']}
+                assert '时间序列算法工程师' not in json.dumps(diagnostic,ensure_ascii=False)
+                assert PASSWORD not in json.dumps(diagnostic) and ACCOUNT not in json.dumps(diagnostic)
+                assert len(CALLS)==before_diagnostic
+                page.locator('#disable-acquisition-trace').click()
+                expect(page.locator('#acquisition-trace')).to_contain_text('已关闭并清除')
+                assert not server.guided.diagnostics({'id':job['id']})['enabled']
+                assert server.guided._load(job['id'])['report_id']==job['report_id']
+                result['checks'].append('D01 opt-in -> local metadata preview -> snapshot download -> clear; no additional upstream requests or loss of report')
                 page.screenshot(path=str(output/'guided-desktop.png'),full_page=True)
                 for p in Path(tmp).rglob('*.json'):
                     text=p.read_text(encoding='utf-8');assert PASSWORD not in text and ACCOUNT not in text
