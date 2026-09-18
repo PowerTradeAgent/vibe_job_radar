@@ -122,24 +122,26 @@ class NativeBackend(PlaywrightBackend):
             self._cdp.send('Target.closeTarget', {'targetId':info['targetId']})
             return
         target = info['targetId']
-        if target not in self._adopting:
-            # Browser-level auto-attach requires flatten=True. Hold that target
-            # while opening a documented non-flattened command session, then
-            # release only the unused automatic attachment.
-            self._adopting.add(target)
-            try:
-                result = self._cdp.send('Target.attachToTarget', {'targetId':target,'flatten':False})
-                legacy = result['sessionId']
-                if legacy not in self._sessions:
-                    self._install_target(legacy, info)
-                self._cdp.send('Target.detachFromTarget', {'sessionId':session})
-            except Exception:
-                self._fatal('native_protocol_error')
-                self._cdp.send('Target.closeTarget', {'targetId':target})
-            finally:
-                self._adopting.discard(target)
+        if session in self._sessions or target in self._adopting:
+            # attachToTarget may emit its attachment event before its response.
+            # The outer adoption owns initialization; a late duplicate event
+            # must not detach/reconfigure the already-owned command session.
             return
-        self._install_target(session, info)
+        self._adopting.add(target)
+        try:
+            # Keep the new command attachment alive while retiring the unused
+            # automatic attachment. Configure Fetch only AFTER that detach:
+            # otherwise a reentrant attachment installs controls before another
+            # debugger is removed, which can reset the target's interception.
+            result = self._cdp.send('Target.attachToTarget', {'targetId':target,'flatten':False})
+            legacy = result['sessionId']
+            self._cdp.send('Target.detachFromTarget', {'sessionId':session})
+            self._install_target(legacy, info)
+        except Exception:
+            self._fatal('native_protocol_error')
+            self._cdp.send('Target.closeTarget', {'targetId':target})
+        finally:
+            self._adopting.discard(target)
 
     def _install_target(self, session, info):
         self._sessions[session] = info['targetId']
