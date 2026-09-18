@@ -32,7 +32,8 @@ from .native_browser import NativeBackend
 from .native_policy import capability as native_capability, contract_for
 from ..network_policy import current_policy
 from .contracts import CrawlError
-from .login_return import LoginReturnManager
+from .login_return import (LoginReturnManager, ReturnedDetail,
+                           matching_detail_signature, pending_detail_target)
 from .session_reuse import reuse_current_session
 from .saved_session import SavedSession
 from .rate import RateLedger, RateLimit
@@ -53,6 +54,8 @@ MESSAGES = {
     'saved_session_cleared': '该平台保存的会话已清除，当前会话已关闭。岗位、报告、个人证据与配额保留。',
     'session_reuse_unavailable': '当前采集会话不是可复用的空闲会话。请先完成原任务的登录/等待，或停止该会话；不会自动另开浏览器重试。',
     'session_reuse_incompatible': '当前会话的平台、后端、浏览器或网络设置不匹配。请保留原任务，或明确停止旧会话后再开始；不会串用身份。',
+    'login_return_changed': '登录返回的详情或任务已变化，未保存、未重复请求该岗位。请核对当前页面后明确继续。',
+    'manual_detail_open': '已打开所选岗位的正常平台页面。请完成平台要求的登录或验证；原岗位完整正文可读后自动接回采集，不必回列表。',
     'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
     'list_page_limit': '本任务列表页数已达到上限。本任务仍受站点共享配额限制。',
     'operation_error': '操作未完成，已有结果保留。请检查环境与页面。',
@@ -731,7 +734,7 @@ class GuidedService:
         self._save(state, 'ready' if state['cards'] else 'empty_list', status='ready' if state['cards'] else 'waiting_manual', phase='select')
 
     @traced('collection', 'service', state_index=0)
-    def _collect(self, state, backend, adapter):
+    def _collect(self, state, backend, adapter, *, returned_detail=None):
         self._save(state, 'collecting', status='running', phase='collect')
         selected = set(state['selection'])
         try:
@@ -744,8 +747,15 @@ class GuidedService:
                 self._save(state)
                 try:
                     trace = self._trace_for(state)
+                    from_current = returned_detail is not None and row['id'] == returned_detail[0]
                     with observe(trace, 'detail_navigation', url=row['url'], entity=row['id']):
-                        page = backend.open(row['url'])
+                        if from_current:
+                            # The owner-worker just revalidated this immutable
+                            # snapshot. Do not request the unlocked JD a second time.
+                            page = returned_detail[1]
+                            returned_detail = None
+                        else:
+                            page = backend.open(row['url'])
                     with observe(trace, 'detail_identity', url=page.url, entity=row['id']):
                         final_url = adapter.accept_url(page.url, detail=True)
                         validate_identity = getattr(adapter, 'validate_detail_identity', None)
@@ -753,6 +763,8 @@ class GuidedService:
                             validate_identity(row['url'], page)
                     with observe(trace, 'detail_parse', url=page.url, entity=row['id']):
                         parsed = adapter.detail(page)
+                    if self._cancel.is_set():
+                        raise CrawlError('paused')
                     with observe(trace, 'persist', entity=row['id']):
                         try:
                             record = JobRecord(**parsed, url=final_url, platform=adapter.key,
@@ -765,7 +777,8 @@ class GuidedService:
                             store.add(record)
                     row.update(status='ok', record_id=record.record_id, resolved_url=final_url, title=record.title,
                                parser=record.parser, body_sha256=hashlib.sha256(record.text.encode('utf-8')).hexdigest(),
-                               adapter_version=getattr(adapter, 'version', 'custom'))
+                               adapter_version=getattr(adapter, 'version', 'custom'),
+                               acquisition_path='login_returned_detail' if from_current else 'navigation')
                     identity = getattr(adapter, 'job_identity', None)
                     if callable(identity):
                         row['platform_job_id'] = identity(final_url)
@@ -836,7 +849,7 @@ class GuidedService:
             audit = {'schema_version': 1, 'task_id': state['id'],
                      'adapter': {'key': adapter.key, 'version': getattr(adapter, 'version', 'custom')},
                      'outcome': outcome, 'items': [
-                         {k: c.get(k, '') for k in ('id', 'url', 'resolved_url', 'status', 'record_id', 'platform_job_id', 'parser', 'body_sha256', 'adapter_version')}
+                         {k: c.get(k, '') for k in ('id', 'url', 'resolved_url', 'status', 'record_id', 'platform_job_id', 'parser', 'body_sha256', 'adapter_version', 'acquisition_path')}
                          for c in state['cards'] if c['id'] in selected]}
             audit_path = report_root/'guided_acquisition.json'
             atomic_json(audit_path, audit)
@@ -864,7 +877,22 @@ class GuidedService:
             except RateLimit as exc:
                 self._save(state, wait_seconds=round(exc.wait, 1))
                 raise CrawlError('login_rate_limited') from exc
-        backend = self._backend(state)
+        if action == 'resume_returned_detail':
+            # This internal action cannot be submitted by the HTTP/UI API. A
+            # replaced browser must never inherit or replay another page's handoff.
+            if (not isinstance(secret, ReturnedDetail)
+                    or self._backends.get(state['id']) is not secret.backend
+                    or state.get('authentication') != 'manual_pending'
+                    or pending_detail_target(state) != secret.target):
+                raise CrawlError('login_return_changed')
+            backend = secret.backend
+            # A returned snapshot can only be consumed by its living owner.
+            # Do not let _backend() launch a replacement or restore a different
+            # browser when the original closed between observation and execution.
+            if hasattr(backend, 'alive') and not backend.alive():
+                raise CrawlError('login_return_changed')
+        else:
+            backend = self._backend(state)
         self._save(state, 'opening', status='running')
         pending_login = state.get('authentication') == 'manual_pending'
         if action == 'login':
@@ -873,8 +901,29 @@ class GuidedService:
             watching = self._login_return.arm(state, backend)
             self._save(state, authentication='manual_pending',
                        login_continuation='watching' if watching else 'off')
-            backend.open(adapter.login_url, authentication=True)
-            self._save(state, 'manual_browser_open', status='waiting_manual', authentication='manual_pending')
+            target = pending_detail_target(state) if watching else None
+            # An explicit opt-in login for an interrupted selection stays on
+            # that job's native login gate, rather than discarding it for a homepage.
+            backend.open(target.expected_url if target else adapter.login_url, authentication=True)
+            self._save(state, 'manual_detail_open' if target else 'manual_browser_open',
+                       status='waiting_manual', authentication='manual_pending')
+        elif action == 'resume_returned_detail':
+            if self._cancel.is_set():
+                raise CrawlError('paused')
+            if getattr(backend, 'policy_check', lambda: True)() is False:
+                raise CrawlError('native_policy_changed')
+            if hasattr(backend, 'collection_mode'):
+                backend.collection_mode()
+            # Third, fresh read: reject navigation/body/identity changes between
+            # observation and execution, with no automatic refetch fallback.
+            page = backend.snapshot()
+            if hasattr(backend, 'wire'):
+                backend.wire.ensure_robots(page.url)
+            if (pending_detail_target(state) != secret.target
+                    or matching_detail_signature(adapter, secret.target.expected_url, page) != secret.signature):
+                raise CrawlError('login_return_changed')
+            self._collect(state, backend, adapter, returned_detail=(secret.target.row_id, page))
+            self._save(state, login_continuation='resumed_detail')
         elif action in {'capture','more','search'}:
             self._gather(state,backend,adapter,navigate=action=='search',more=action=='more')
         elif action in {'collect','resume'}:
@@ -882,7 +931,7 @@ class GuidedService:
                 self._collect(state,backend,adapter)
             else:
                 self._gather(state,backend,adapter,navigate=action=='resume')
-        if (pending_login and action in {'capture', 'search', 'resume', 'collect'}
+        if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail'}
                 and state['status'] in {'ready', 'completed'}):
             # This is task progress after a user action, not login certification.
             self._save(state, authentication='user_resumed')
@@ -957,6 +1006,8 @@ class GuidedService:
                 else:
                     try:
                         current = self._load(ident)
+                        if action == 'resume_returned_detail':
+                            state['login_continuation'] = 'needs_attention'
                         stopping = self._stop_ident == ident
                         if stopping:
                             self._close_backend(ident)
