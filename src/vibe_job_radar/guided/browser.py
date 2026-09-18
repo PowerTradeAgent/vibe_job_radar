@@ -15,6 +15,7 @@ from ..network_policy import current_policy
 from .contracts import CrawlError, PageSnapshot
 from .rate import RateLimit
 from .transport import PinnedTransport
+from .diagnostic_trace import traced, notify
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
                              failed_report, supported_version, safe_text)
 
@@ -157,10 +158,18 @@ class PlaywrightBackend:
                 # A malformed cookie never relaxes origin restrictions.
                 continue
 
+    def bind_diagnostics(self, trace):
+        # Same explicit object in callback greenlets; no ambient ContextVar.
+        self._diagnostics = trace
+        self.wire._diagnostics = trace
+        notify(trace, 'set_browser_version', value=getattr(getattr(self, 'browser', None), 'version', None))
+
+    @traced('route', 'browser', route=True)
     def _route(self, route):
         request = route.request
         try:
             if self.cancelled.is_set():
+                notify(getattr(self, '_diagnostics', None), 'mark', code='paused')
                 route.abort('blockedbyclient')
                 return  # Idle polling must not poison the next explicit action.
             url, kind, method = request.url, request.resource_type, request.method
@@ -182,6 +191,7 @@ class PlaywrightBackend:
             # by a new, checked navigation; XHR redirects fail closed.
             result = self.wire.fetch(url, method, request.all_headers(), request.post_data_buffer,
                                      required=kind in {'document', 'xhr', 'fetch'})
+            notify(getattr(self, '_diagnostics', None), 'mark', status=result.status)
             self._cookies(url, result.cookies)
             if 300 <= result.status < 400:
                 destination = urljoin(url, result.headers.get('location', ''))
@@ -202,6 +212,7 @@ class PlaywrightBackend:
                 'set-cookie', 'alt-svc', 'report-to', 'nel'}}
             route.fulfill(status=result.status, headers=filtered, body=result.body)
         except CrawlError as exc:
+            notify(getattr(self, '_diagnostics', None), 'mark', code=exc.code)
             if (request.resource_type not in {'document', 'xhr', 'fetch'}
                     and exc.code in {'http_401', 'http_403'}):
                 self.resource_denials.add('optional_' + exc.code)
@@ -219,6 +230,7 @@ class PlaywrightBackend:
             except Exception:
                 pass
         except Exception:
+            notify(getattr(self, '_diagnostics', None), 'mark', code='network_error')
             self.error = 'network_error'
             try:
                 route.abort('failed')
@@ -249,6 +261,7 @@ class PlaywrightBackend:
         if self.error:
             raise getattr(self, 'wait_error', None) or CrawlError(self.error)
 
+    @traced('navigation', 'browser', url=True)
     def open(self, url: str, *, authentication: bool = False) -> PageSnapshot:
         self.auth_mode, self.error, self.redirects = authentication, None, 0
         self.wait_error = None
@@ -287,6 +300,7 @@ class PlaywrightBackend:
                     return candidate
         return None
 
+    @traced('pagination', 'browser')
     def next_page(self) -> bool:
         self.auth_mode, self.error, self.redirects = False, None, 0
         self.wait_error = None

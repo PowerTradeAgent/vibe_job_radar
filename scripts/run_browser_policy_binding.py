@@ -125,7 +125,7 @@ def main():
                 return workspace,service
             workspace, service = make('consented',True)
             query = {'platform':'fixture','keyword':'时间序列算法工程师','roles':['time_series'],
-                     'max_pages':1,'max_jobs':1,'consent':True,'rights_note':'人工上游，仅验证本地流程；非平台许可。'}
+                     'max_pages':1,'max_jobs':1,'consent':True,'diagnostics':True,'rights_note':'人工上游，仅验证本地流程；非平台许可。'}
 
             def exercise():
                 diagnostic = service.diagnose({'platform':'fixture'})
@@ -151,6 +151,13 @@ def main():
                 assert report['manifest']['stats']['full_text_job_groups']==1
                 assert report['manifest']['research_brief']['status']=='research_ready'
                 result['checks'].append('selected detail crosses the same production HTTPS bridge and becomes an original full-text research report')
+                trace = service.diagnostics({'id':task['id']})
+                stages = {event['stage'] for event in trace['events']}
+                assert {'route','http_request','robots','list_parse','detail_parse','persist','report'} <= stages
+                assert trace['trace_id'] == task['id'] and trace['observer_errors'] == 0
+                assert '时间序列算法工程师' not in json.dumps(trace,ensure_ascii=False)
+                result['checks'].append('opt-in D01 trace binds across the real callback context through transport, parser, store and report without retaining query or JD text')
+                (out/'acquisition-diagnostic.json').write_text(json.dumps(trace,ensure_ascii=False,indent=2),encoding='utf-8')
                 # Revoke on the original workspace; old bound object must NOT override it.
                 save_settings(workspace,{'mode':'system','revision':1,'consent':False})
                 before = (len(fixture.posts),len(fixture.targets))

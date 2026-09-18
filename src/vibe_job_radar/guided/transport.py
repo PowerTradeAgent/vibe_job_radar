@@ -23,6 +23,7 @@ from ..network_policy import NetworkPolicy, current_policy, use_policy
 from .contracts import CrawlError
 from .rate import RateLedger, RateLimit
 from .request_headers import browser_headers
+from .diagnostic_trace import traced, notify, observe_robots
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ class PinnedTransport:
                     break
         raise CrawlError('paused')
 
+    @traced('http_request', 'transport', url=True)
     def fetch(self, url: str, method='GET', headers=None, body=None, *, required=True) -> WireResponse:
         try:
             host, target = validate_url_target(url, self.domains)
@@ -132,6 +134,7 @@ class PinnedTransport:
         try:
             conn.request(method, target, body=body, headers=hdr)
             response = conn.getresponse()
+            notify(getattr(self, '_diagnostics', None), 'mark', status=response.status)
             pairs = response.getheaders()
             metadata = {k.lower(): v for k, v in pairs if k.lower() != 'set-cookie'}
             if response.status in {401, 403, 429}:
@@ -172,11 +175,13 @@ class PinnedTransport:
             except (ValueError, TypeError, OverflowError):
                 return 300
 
+    @traced('robots', 'transport', url=True)
     def ensure_robots(self, url: str) -> None:
         p = urlsplit(url)
         origin = f'https://{p.netloc}'
         if origin not in self.robots:
             result = self.fetch(origin + '/robots.txt')
+            observe_robots(getattr(self, '_diagnostics', None), result)
             if result.status != 200 or 'html' in result.headers.get('content-type', '').lower():
                 raise CrawlError('robots_unavailable')
             parser = RobotFileParser()
