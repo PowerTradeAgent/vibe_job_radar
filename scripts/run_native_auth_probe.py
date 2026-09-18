@@ -1,6 +1,7 @@
 """Metadata-only wrapper around the unchanged local native acceptance suite.
 
-No target URLs, headers, credentials, bodies or protocol error text are recorded.
+No target URLs, headers, credentials or bodies are recorded. Existing redacted
+component-startup reports are retained if initialization fails before tracing.
 This developer-only probe changes neither authentication nor request decisions.
 """
 from __future__ import annotations
@@ -33,7 +34,15 @@ class ObservedBackend(acceptance.NativeBackend):
         self.probe = {'sent': Counter(), 'acknowledged': Counter(), 'events': Counter(),
                       'attachments': Counter(), 'auth': Counter(), 'snapshots': []}
         PROBES.append(self.probe)
-        super().__init__(*args, **kwargs)
+        try:
+            super().__init__(*args, **kwargs)
+        except Exception as exc:
+            # Reuse the existing redacted component report, not raw protocol
+            # messages or browser traffic. Tests use only an artificial source.
+            report = getattr(exc, 'report', None)
+            if isinstance(report, dict):
+                self.probe['startup_diagnostic'] = report
+            raise
 
     def _attached(self, event):
         kind = event.get('targetInfo', {}).get('type')
