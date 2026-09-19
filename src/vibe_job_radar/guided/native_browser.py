@@ -711,11 +711,18 @@ class NativeBackend(PlaywrightBackend):
 
     def next_page(self):
         self._check_error()
+        return super().next_page()
+
+    def _before_pagination_click(self):
+        # Looking for a next button is not a navigation. Retain the current
+        # API result when the button is absent/disabled or permission/quota
+        # rejects the action. Invalidate only immediately before an actual
+        # click, so late responses cannot populate the next page with old data.
+        self._check_error()
         self._epoch += 1
         self._observations.clear()
         self.__dict__.get('_latest_business', {}).clear()
         self._observed_bytes = 0
-        return super().next_page()
 
     def collection_mode(self):
         super().collection_mode()

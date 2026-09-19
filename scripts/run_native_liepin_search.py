@@ -150,7 +150,7 @@ def main():
                     service = GuidedService(workspace,registry=Registry([local]),
                         ledger=RateLedger(root/'rate.sqlite', Limits(page_interval=0,request_interval=0)), native_backend_factory=factory)
                     services.append(service)
-                    query={'platform':'liepin','keyword':'时间序列','roles':['time_series'],'max_pages':1,'max_jobs':1,
+                    query={'platform':'liepin','keyword':'时间序列','roles':['time_series'],'max_pages':2,'max_jobs':1,
                            'consent':True,'rights_note':'仅合成测试','backend':'native','native_consent':True,'diagnostics':True}
                     service.create(query); task=wait(service)
                     result['first_task_code'] = task['code']
@@ -163,6 +163,21 @@ def main():
                     native = service._backends[task['id']]
                     assert native.native_counts['business']==2, 'POST and preflight must both be accounted'
                     result['checks'].append('native CDN script and cross-origin preflight/search POST supply a candidate without DOM links or login')
+                    # With a two-page budget, the first gather has already
+                    # looked for a next button. This source has none. A plain
+                    # reread must still use the obtained API response, without
+                    # repeating search/login or turning the result into empty.
+                    cards_before = task['cards']
+                    requests_before = len(server.requests)
+                    count_before = dict(native.native_counts)
+                    service.action({'id': task['id'], 'action': 'capture'})
+                    task = wait(service)
+                    assert task['status'] == 'ready' and task['code'] == 'ready', task.get('code')
+                    assert task['cards'] == cards_before, 'no-next discarded existing API candidates'
+                    assert len(server.requests) == requests_before, 'reread caused an extra source request'
+                    assert native.native_counts == count_before, 'reread consumed request/page budget'
+                    assert service._backends[task['id']] is native, 'reread replaced the browser session'
+                    result['checks'].append('absent next button preserves API-only candidates for reread and collection with zero additional requests')
                     service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]}); task=wait(service)
                     assert task['status']=='completed' and task['outcome']['saved']==1,task.get('code')
                     with Store(workspace.db) as store:
