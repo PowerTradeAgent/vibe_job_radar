@@ -185,6 +185,14 @@ class NativeBackend(PlaywrightBackend):
         targets = self.__dict__.setdefault('_pending_rejected_targets', [])
         while targets:
             target = targets.pop(0)
+            # Cancellation and rejection already stopped this target. Retire
+            # its protocol callbacks BEFORE closeTarget yields to the driver:
+            # a late quarantine-command error must not close the main job tab.
+            # This only removes our bookkeeping; it never resumes a target,
+            # disables interception or continues a pending network request.
+            for session, owned_target in tuple(self._sessions.items()):
+                if owned_target == target:
+                    self._detached({'sessionId': session})
             try:
                 self._cdp.send('Target.closeTarget', {'targetId': target})
             except Exception:
