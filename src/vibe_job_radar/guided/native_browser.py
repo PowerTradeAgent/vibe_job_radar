@@ -2,8 +2,9 @@
 
 CDP Fetch observes/authorizes each owned-page hop. A context route rejects
 unowned pages before their initial request (a page event can arrive too late).
-Owned requests continue unchanged; no HTTP replay is used. CORS contexts add
-one restrictive document CSP; original source headers and bodies are retained.
+Owned requests use native networking without HTTP request replay. CORS contexts
+deliver native-fetched document bytes with one extra restrictive CSP; original
+publisher security policies remain enforced.
 Cross-origin requests require an exact, code-owned CORS operation contract.
 Only application-owned browser targets are used. Worker/OOPIF targets are stopped
 before running until their complete request accounting is separately supported.
@@ -23,7 +24,7 @@ from .diagnostic_trace import notify, observe, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
 from .native_errors import native_failure_code
-from .native_documents import document_response_params
+from .native_documents import continue_document_response
 from .rate import RateLimit
 from .transport import PinnedTransport
 from ..network import USER_AGENT
@@ -240,6 +241,7 @@ class NativeBackend(PlaywrightBackend):
         # Retire the temporary target-creation attachment BEFORE configuring
         # Fetch on the public Playwright page session. Edge does not deliver
         # interception events through the old non-flattened relay reliably.
+        # Removing the old attachment first preserves page-level interception.
         for old, known in tuple(self._sessions.items()):
             if known == target:
                 self._cdp.send('Target.detachFromTarget', {'sessionId':old})
@@ -590,11 +592,10 @@ class NativeBackend(PlaywrightBackend):
         record['status']=status
         record['json']=headers.get('content-type','').split(';')[0].strip().lower()=='application/json'
         self.native_counts['responses']+=1
-        # Bodies, compression and cookies remain native. CORS contexts add one
-        # restrictive document CSP before scripts can create an unowned target.
-        # Existing publisher headers and actual preflight replies stay intact.
-        self._send(session, 'Fetch.continueResponse', document_response_params(
-            event, enabled=getattr(self, '_native_cors', False)))
+        # CORS documents need a fully parsed policy before scripts execute.
+        # No HTTP request is repeated; actual preflight/business replies remain
+        # native. See native_documents for the bounded decoded-body delivery.
+        continue_document_response(self, session, event)
 
     def _finished(self, session, event):
         key=(session,event['requestId']); record=self._requests.pop(key,None)

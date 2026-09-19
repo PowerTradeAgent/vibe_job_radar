@@ -1,8 +1,9 @@
 """Document-only CSP restriction; never relax source CSP/CORS or login gates."""
 import copy
+import base64
 import unittest
 
-from vibe_job_radar.guided.native_documents import document_response_params, DOCUMENT_SANDBOX
+from vibe_job_radar.guided.native_documents import document_response_params, continue_document_response, DOCUMENT_SANDBOX
 import test_native_acquisition as fixtures
 
 
@@ -87,8 +88,8 @@ class ControllerDocumentPolicyTests(unittest.TestCase):
         self.b._paused('session', self.response(200, {'content-type': 'text/html'},
                                              path='/search', method='GET', kind='Document'))
         args = self.b._send.call_args.args
-        self.assertEqual(args[1], 'Fetch.continueResponse')
-        self.assertEqual(args[2]['responseHeaders'][-1]['value'], DOCUMENT_SANDBOX)
+        self.assertEqual(args[1], 'Fetch.getResponseBody')
+        self.assertEqual(args[2], {'requestId': 'fetch-1'})
         self.assertIsNone(self.b.error)
 
     def test_source_denial_still_aborts_not_sandboxed_success(self):
@@ -102,11 +103,83 @@ class ControllerDocumentPolicyTests(unittest.TestCase):
         self.b._native_cors = True
         self.b._paused('session', self.req('/search', 'GET', 'Document'))
         calls = []
-        def send(session, method, params):
+        def send(session, method, params, callback=None):
             calls.append(method)
-            if method == 'Fetch.continueResponse':
+            if method == 'Fetch.getResponseBody':
                 raise RuntimeError('unsupported document policy')
         self.b._send.side_effect = send
         self.b._paused('session', self.response(200, path='/search', method='GET', kind='Document'))
         self.assertEqual(self.b.error, 'native_protocol_error')
-        self.assertEqual(calls, ['Fetch.continueResponse', 'Fetch.failRequest'])
+        self.assertEqual(calls, ['Fetch.getResponseBody', 'Fetch.failRequest'])
+
+
+class NativeDocumentDeliveryTests(unittest.TestCase):
+    setUp = fixtures.NativeControllerTests.setUp
+
+    def prepare(self, **changes):
+        self.b._native_cors = True
+        e = event(**changes)
+        continue_document_response(self.b, 'session', e)
+        args = self.b._send.call_args.args
+        self.assertEqual(args[1:3], ('Fetch.getResponseBody', {'requestId': 'r'}))
+        return e, args[3]
+
+    def test_native_bytes_delivered_unchanged_with_all_publisher_policies(self):
+        headers = [{'name': 'Content-Type', 'value': 'text/html; charset=gbk'},
+                   {'name': 'Content-Encoding', 'value': 'gzip'},
+                   {'name': 'Content-Length', 'value': '99'},
+                   {'name': 'Transfer-Encoding', 'value': 'chunked'},
+                   {'name': 'Set-Cookie', 'value': 'fixture_a=1; HttpOnly; Secure'},
+                   {'name': 'Set-Cookie', 'value': 'fixture_b=2; Secure'},
+                   {'name': 'Content-Security-Policy', 'value': "object-src 'none'"}]
+        e, deliver = self.prepare(responseHeaders=headers)
+        original = copy.deepcopy(e)
+        raw = '<h1>合成页面</h1>'.encode('gbk')
+        deliver({'body': base64.b64encode(raw).decode(), 'base64Encoded': True})
+        args = self.b._send.call_args.args
+        self.assertEqual(args[1], 'Fetch.fulfillRequest')
+        self.assertEqual(base64.b64decode(args[2]['body']), raw)
+        self.assertEqual(args[2]['responseHeaders'], [headers[0], *headers[4:],
+            {'name':'Content-Security-Policy', 'value':DOCUMENT_SANDBOX},
+            {'name':'Content-Length', 'value':str(len(raw))}])
+        self.assertEqual(e, original)
+
+    def test_plain_text_protocol_result_is_utf8_encoded(self):
+        _, deliver = self.prepare()
+        deliver({'body': '合成页面', 'base64Encoded': False})
+        self.assertEqual(base64.b64decode(self.b._send.call_args.args[2]['body']), '合成页面'.encode())
+
+    def test_retired_target_cannot_receive_late_body(self):
+        _, deliver = self.prepare()
+        self.b._sessions.clear(); self.b._send.reset_mock()
+        deliver({'body': 'irrelevant'})
+        self.b._send.assert_not_called()
+
+    def test_cancel_or_policy_change_never_delivers_content(self):
+        from vibe_job_radar.guided.contracts import CrawlError
+        for case in ('cancel', 'policy', 'halt'):
+            with self.subTest(case=case):
+                self.b.cancelled.clear(); self.b._halted=False; self.b.policy_check=lambda:True
+                _, deliver = self.prepare()
+                self.b._send.reset_mock()
+                if case == 'cancel': self.b.cancelled.set()
+                elif case == 'policy': self.b.policy_check=lambda:False
+                else: self.b._halted=True; self.b.error='http_403'
+                with self.assertRaises(CrawlError): deliver({'body': 'unusable'})
+                self.b._send.assert_not_called()
+
+    def test_invalid_or_oversized_body_is_not_fulfilled(self):
+        from vibe_job_radar.guided.contracts import CrawlError
+        for response in ({'body': None}, {'body':'*notbase64*','base64Encoded':True},
+                         {'body':'x'*5_000_001}, {'body':'A'*6_700_001}):
+            with self.subTest(kind=type(response['body']).__name__):
+                _, deliver = self.prepare(); self.b._send.reset_mock()
+                with self.assertRaises(CrawlError): deliver(response)
+                self.b._send.assert_not_called()
+
+    def test_bodyless_status_remains_native(self):
+        self.b._native_cors=True
+        for status in (204,205):
+            continue_document_response(self.b, 'session', event(responseStatusCode=status))
+            self.assertEqual(self.b._send.call_args.args[1:],
+                             ('Fetch.continueResponse', {'requestId':'r'}))

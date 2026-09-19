@@ -9,6 +9,7 @@ import argparse
 from contextlib import ExitStack
 from dataclasses import replace
 import http.server
+import gzip
 import json
 from pathlib import Path
 import socket
@@ -23,7 +24,7 @@ from run_native_browser_acceptance import (ROOT, HOST, URL, NativeBackend, RateL
     Limits, GuidedService, Registry, Store, NetworkPolicy, use_policy, Workspace,
     trust_fixture, RECORDED_BODY, RECORDED_TITLE, recorded_markup, recorded_posting)
 from vibe_job_radar.guided.adapters import builtins
-from vibe_job_radar.guided.native_policy import contract_for
+from vibe_job_radar.guided.native_policy import contract_for, NativeRule
 
 API_HOST = 'api.' + HOST
 CDN_HOST = 'static.' + HOST
@@ -39,11 +40,15 @@ class SearchFixture:
         class Handler(http.server.BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
             def log_message(self, *_): pass
-            def send(self, content, mime='text/html; charset=utf-8', status=200):
+            def send(self, content, mime='text/html; charset=utf-8', status=200, extra=()):
                 raw = content.encode('utf-8')
+                compressed = mime.startswith('text/html')
+                if compressed: raw = gzip.compress(raw)
                 self.send_response(status)
                 self.send_header('Content-Type', mime)
                 self.send_header('Content-Length', str(len(raw)))
+                if compressed: self.send_header('Content-Encoding', 'gzip')
+                for key, value in extra: self.send_header(key, value)
                 if mime.startswith('text/html'):
                     # The publisher permits popups; the added restriction must
                     # independently prohibit them and retain this policy.
@@ -77,6 +82,9 @@ fetch('https://""" + API_HOST + PATH + """', {
  method:'POST', headers:{'Content-Type':'application/json','X-Client-Type':'web'},
  body: JSON.stringify({data:{mainSearchPcConditionForm:{key,currentPage:0,pageSize:40}}})
 }).then(r => r.json()).then(j => {document.querySelector('#loaded').textContent='response received';});""", 'application/javascript')
+                elif path == '/fixture-login':
+                    self.send('<h1>人工登录</h1><form method="post" action="/fixture-login">'
+                              '<button>人工确认</button></form>')
                 elif path == '/job/123.shtml':
                     self.send(recorded_markup(recorded_posting(url=URL + path)))
                 else: self.send('unknown', status=404)
@@ -86,6 +94,11 @@ fetch('https://""" + API_HOST + PATH + """', {
                 else: self.send('', status=403 if owner.deny_cors else 204)
             def do_POST(self):
                 self.record()
+                if self.path == '/fixture-login':
+                    self.rfile.read(int(self.headers.get('Content-Length', '0')))
+                    self.send('<h1>人工登录完成</h1>', extra=[
+                        ('Set-Cookie', 'local_login_fixture=valid; HttpOnly; Secure; SameSite=Lax')])
+                    return
                 if self.path != PATH: self.send('unknown', status=405); return
                 raw = self.rfile.read(int(self.headers.get('Content-Length', '0')))
                 form = json.loads(raw)['data']['mainSearchPcConditionForm']
@@ -247,6 +260,31 @@ def main():
                         assert not any(r['path']=='/apply' for r in server.requests), 'popup first request escaped'
                     finally: b.close()
                     result['checks'].append('CORS document sandbox blocks initial-script, window.open, noopener, link and form popups before HTTP; main search remains usable')
+                    # Same-tab normal forms and native Cookie processing must
+                    # still work under the extra policy. These login endpoints
+                    # exist ONLY on this artificial server/contract.
+                    login_rules = (*local_contract.rules,
+                        NativeRule('fixture_login_page', HOST, r'/fixture-login',
+                                   resources=('Document',), role='document'),
+                        NativeRule('fixture_login_submit', HOST, r'/fixture-login',
+                                   methods=('POST',), resources=('Document',),
+                                   role='login', authentication=True))
+                    login_adapter = replace(local, native_contract=replace(local_contract, rules=login_rules))
+                    b = factory(login_adapter, RateLedger(root/'form.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
+                    try:
+                        b.open(URL+'/fixture-login', authentication=True)
+                        with b.page.expect_navigation(wait_until='domcontentloaded'):
+                            b.page.get_by_role('button', name='人工确认').click()
+                        b._check_error()
+                        assert b.page.locator('h1').inner_text() == '人工登录完成'
+                        cookie = next(c for c in b.context.cookies([URL]) if c['name']=='local_login_fixture')
+                        assert cookie['value']=='valid' and cookie['httpOnly'] and cookie['secure']
+                        b.open(local.search_url('时间序列'))
+                        assert b.adapter.cards(b.snapshot())
+                        assert any(r['path']=='/zhaopin/' and not r['anonymous'] for r in server.requests)
+                        assert not any(r['path']=='/apply' for r in server.requests)
+                    finally: b.close()
+                    result['checks'].append('sandboxed gzip documents preserve normal same-tab form POST, HttpOnly Cookie and subsequent API-only search; artificial login only')
                     # A real publisher rejection must prevent the POST rather
                     # than getting replaced by a driver-generated success.
                     before = sum(r['method']=='POST' for r in server.requests)

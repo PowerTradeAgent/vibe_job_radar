@@ -16,7 +16,11 @@
 
 由浏览器在文档执行前实施，不授权 popups/popups-to-escape-sandbox、下载或其他额外能力。脚本、原站点 origin、Cookie 和同窗口的正常表单仍可运行，所有实际请求仍须经过原角色/域名/方法/robots/配额/取消检查。没有伪造接口、自动填写密码或放开跨源 SSO。
 
-这是对既有“完全不改响应头”保证的一处明确收窄：响应正文不读取重建；原头的顺序、重复值、大小写全部保留，只增加更严格的 CSP。每一条源站 CSP 都仍参与限制，不替换/删改它；不修改任何 CORS、Cookie、压缩字段，预检及业务响应完全原样，源站拒绝仍阻止 POST。TLS 仍由浏览器端到端验证。不能将其描述为所有响应头逐字未变。
+这是对既有“完全不改文档响应”保证的一处明确收窄：浏览器先完成获准请求和TLS验证，CORS上下文的Document响应在原状态/大小/权限检查后读取原生返回的正文，重新以**同一份解码字节**交付并追加更严格CSP，不重复任何HTTP请求。原CSP/Set-Cookie等重复头保留；Content-Encoding、Transfer-Encoding和旧Content-Length不用于已解码的本地表示，长度重新计算。其他类型的预检/业务/资源响应完全原样，源站拒绝仍阻止POST。不可宣称所有响应头/响应元数据逐字未变或仍具有完整流式文档呈现。
+
+最多接受5,000,000个解码正文bytes；读取后、交付前再次检查同一目标未退休、取消、策略和原停止状态，过大或格式异常停止，不重试/降级。GetResponseBody由浏览器缓冲并返回数据后做本地长度检查，因此该上限不是对浏览器内部缓冲内存的硬隔离保证。零正文204/205保持原生。真实证书失败在读取前就由原浏览器/状态处理停止，不用本地交付制造成功。
+
+初版2d4仅使用Fetch.continueResponse追加头：Linux headed仍出现真正的辅助page而停止，未再记录/apply。被动事件记录确认不是浏览器地址栏误报。Chromium第一方源码的头部覆盖分支只更新URLResponseHead.headers并继续转交原head，未重建已解析策略；这是头部修改不可靠的一个有源码依据的解释，而非所有版本的断言。本次改用原文档字节的显式交付，使浏览器对完整响应重新处理策略，不忽略该失败。
 
 不使用 JavaScript 重写 window.open，不依靠延迟关闭，不通过 Playwright 全局路由合成 OPTIONS，不启用 bypass_csp 或 ignore_https_errors。非 CORS 原生上下文及旧 bridge 不受此次文档策略影响。协议调用失败继续停止，绝不降级为不加限制后继续。
 
@@ -33,5 +37,6 @@
 ## 公开依据
 
 - W3C CSP3 sandbox 与多策略并行：https://www.w3.org/TR/CSP3/#directive-sandbox ，https://www.w3.org/TR/CSP3/#multiple-policies
-- Chrome DevTools Protocol Fetch.continueResponse：https://chromedevtools.github.io/devtools-protocol/tot/Fetch/#method-continueResponse
+- Chrome DevTools Protocol Fetch.getResponseBody/fulfillRequest：https://chromedevtools.github.io/devtools-protocol/tot/Fetch/
+- Chromium请求拦截器第一方源码（header-only与ProcessResponseOverride分支）：https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/devtools/devtools_url_loader_interceptor.cc
 - Playwright 新 page 事件可能在首次请求响应开始后才触发：https://playwright.dev/python/docs/api/class-browsercontext#browser-context-event-page
