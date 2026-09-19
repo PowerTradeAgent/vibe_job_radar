@@ -47,11 +47,11 @@ jobs:
       - name: Verify recorded Liepin CORS search through native Chromium
         if: runner.os == 'Linux'
         timeout-minutes: 3
-        run: ${{ matrix.mode == 'headed' && 'xvfb-run -a' || '' }} python scripts/run_native_liepin_search.py --controlled ${{ matrix.mode == 'headed' && '--headed' || '' }}
+        run: ${{ matrix.mode == 'headed' && 'xvfb-run -a' || '' }} python scripts/run_native_liepin_probe.py --controlled ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Verify recorded Liepin CORS search through native Edge
         if: runner.os == 'Windows'
         timeout-minutes: 3
-        run: python scripts/run_native_liepin_search.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
+        run: python scripts/run_native_liepin_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Preserve native evidence including failures
         if: always()
         uses: actions/upload-artifact@v4
