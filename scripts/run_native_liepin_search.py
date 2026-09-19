@@ -44,6 +44,11 @@ class SearchFixture:
                 self.send_response(status)
                 self.send_header('Content-Type', mime)
                 self.send_header('Content-Length', str(len(raw)))
+                if mime.startswith('text/html'):
+                    # The publisher permits popups; the added restriction must
+                    # independently prohibit them and retain this policy.
+                    self.send_header('Content-Security-Policy',
+                        "object-src 'none'; sandbox allow-scripts allow-same-origin allow-forms allow-popups")
                 self.send_header('Access-Control-Allow-Origin', URL)
                 self.send_header('Access-Control-Allow-Methods', 'POST')
                 self.send_header('Access-Control-Allow-Headers', 'content-type,x-client-type')
@@ -61,7 +66,10 @@ class SearchFixture:
                 elif path == '/zhaopin/':
                     # Intentionally no anchors: only the browser response can
                     # produce the candidate; a DOM-only implementation fails.
-                    self.send('<!doctype html><meta charset="utf-8"><h1>合成搜索页</h1>'
+                    early = ('<script>window.initialPopupBlocked = '
+                             '(window.open("/apply") === null);</script>'
+                             if parse_qs(urlsplit(self.path).query).get('key') == ['窗口隔离'] else '')
+                    self.send('<!doctype html><meta charset="utf-8">' + early + '<h1>合成搜索页</h1>'
                               '<div id="loaded"></div><script src="https://' + CDN_HOST + ASSET + '"></script>')
                 elif path == ASSET:
                     self.send("""const key = new URL(location.href).searchParams.get('key');
@@ -217,13 +225,28 @@ def main():
                     # browser-generated popup must not leak even its first HTTP.
                     b = factory(local, RateLedger(root/'popup.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
                     try:
-                        b.open(local.search_url('时间序列'))
-                        b.page.evaluate("() => {window.open('/apply'); window.open('/apply', '_blank', 'noopener');}")
+                        b.open(local.search_url('窗口隔离'))
+                        assert b.page.evaluate('window.initialPopupBlocked') is True, 'early script opened a popup'
+                        for _ in range(5):
+                            blocked = b.page.evaluate("""() => {
+                                const first = window.open('/apply');
+                                const second = window.open('/apply', '_blank', 'noopener');
+                                const a = document.createElement('a');
+                                a.href='/apply'; a.target='_blank'; document.body.append(a); a.click(); a.remove();
+                                const f = document.createElement('form');
+                                f.action='/apply'; f.method='POST'; f.target='_blank';
+                                document.body.append(f); f.submit(); f.remove();
+                                return first === null && second === null;
+                            }""")
+                            assert blocked, 'renderer allowed an auxiliary window'
+                            b.pump()
+                        assert not b.page.is_closed(), 'popup refusal destroyed the main job page'
+                        assert b.adapter.cards(b.snapshot()), 'search data lost after popup refusal'
                         b.pump()
                         assert len(b.context.pages)==1, 'uncontrolled popup remains'
                         assert not any(r['path']=='/apply' for r in server.requests), 'popup first request escaped'
                     finally: b.close()
-                    result['checks'].append('CORS context still blocks initial popup HTTP without Playwright synthetic preflight')
+                    result['checks'].append('CORS document sandbox blocks initial-script, window.open, noopener, link and form popups before HTTP; main search remains usable')
                     # A real publisher rejection must prevent the POST rather
                     # than getting replaced by a driver-generated success.
                     before = sum(r['method']=='POST' for r in server.requests)

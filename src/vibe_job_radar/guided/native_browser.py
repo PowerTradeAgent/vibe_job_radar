@@ -2,7 +2,8 @@
 
 CDP Fetch observes/authorizes each owned-page hop. A context route rejects
 unowned pages before their initial request (a page event can arrive too late).
-Owned traffic continues unchanged; no route.fetch/fulfill or HTTP replay is used.
+Owned requests continue unchanged; no HTTP replay is used. CORS contexts add
+one restrictive document CSP; original source headers and bodies are retained.
 Cross-origin requests require an exact, code-owned CORS operation contract.
 Only application-owned browser targets are used. Worker/OOPIF targets are stopped
 before running until their complete request accounting is separately supported.
@@ -22,6 +23,7 @@ from .diagnostic_trace import notify, observe, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
 from .native_errors import native_failure_code
+from .native_documents import document_response_params
 from .rate import RateLimit
 from .transport import PinnedTransport
 from ..network import USER_AGENT
@@ -588,8 +590,11 @@ class NativeBackend(PlaywrightBackend):
         record['status']=status
         record['json']=headers.get('content-type','').split(';')[0].strip().lower()=='application/json'
         self.native_counts['responses']+=1
-        # No response byte/header reconstruction, decompression or Cookie parsing.
-        self._send(session,'Fetch.continueResponse',{'requestId':event['requestId']})
+        # Bodies, compression and cookies remain native. CORS contexts add one
+        # restrictive document CSP before scripts can create an unowned target.
+        # Existing publisher headers and actual preflight replies stay intact.
+        self._send(session, 'Fetch.continueResponse', document_response_params(
+            event, enabled=getattr(self, '_native_cors', False)))
 
     def _finished(self, session, event):
         key=(session,event['requestId']); record=self._requests.pop(key,None)
