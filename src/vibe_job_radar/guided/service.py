@@ -269,6 +269,8 @@ class GuidedService:
             raise InputError('在本机保留会话必须为明确的布尔选项。')
         if type(data.get('reuse_current_session', False)) is not bool:
             raise InputError('复用当前采集会话必须为明确的布尔选项。')
+        if type(data.get('auto_collect', False)) is not bool:
+            raise InputError('搜索后自动采集必须为明确的布尔选项。')
         if type(data.get('diagnostics', False)) is not bool:
             raise InputError('诊断选项必须为布尔值。')
         mode = data.get('backend', 'bridge')
@@ -299,6 +301,7 @@ class GuidedService:
                  'rights_note': rights, 'search_url': seed or adapter.search_url(keyword),
                  'status': 'queued', 'code': 'new', 'cards': [], 'pages_seen': [], 'report_id': '',
                  'phase': 'search', 'selection': [], 'created_at': utc_now(), 'updated_at': utc_now(),
+                 'auto_collect': data.get('auto_collect', False), 'auto_selection_applied': False,
                  'authentication': 'not_checked', 'certification': 'not_live_verified',
                  'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode,
                  'reuse_current_session': data.get('reuse_current_session', False), 'session_reused': False,
@@ -315,7 +318,7 @@ class GuidedService:
         state = self._load(ident)
         if any(k in data for k in ('username','password','cookie','credential_consent')):
             raise InputError('本向导不接收账号密码；请在平台原生浏览器页面登录。')
-        if any(k in data for k in ('backend', 'native_consent', 'native_contract', 'persist_session', 'storage_state')):
+        if any(k in data for k in ('backend', 'native_consent', 'native_contract', 'persist_session', 'storage_state', 'auto_collect')):
             raise InputError('任务后端不可中途更换；新任务仍共享原配额。')
         permitted = {'search', 'login', 'capture', 'more', 'collect', 'pause', 'stop', 'resume', 'forget_session'}
         if action not in permitted:
@@ -349,6 +352,7 @@ class GuidedService:
                     or any(not isinstance(i,str) or i not in known for i in ids) or len(set(ids))!=len(ids)):
                 raise InputError('请选择列表中的岗位，不能超过本批数量上限。')
             state['selection'] = ids
+            state['selection_source'] = 'manual'
             state['report_id'] = ''
             state.pop('outcome', None)
             state['phase'] = 'collect'
@@ -931,10 +935,29 @@ class GuidedService:
                 self._collect(state,backend,adapter)
             else:
                 self._gather(state,backend,adapter,navigate=action=='resume')
+        if action in {'search', 'capture', 'resume'}:
+            self._auto_collect_ready(state, backend, adapter)
         if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail'}
                 and state['status'] in {'ready', 'completed'}):
             # This is task progress after a user action, not login certification.
             self._save(state, authentication='user_resumed')
+
+    def _auto_collect_ready(self, state, backend, adapter):
+        """Apply the user's bounded query-order selection once, never on a gate.
+
+        This is the existing collector, not a second downloader. Interrupted
+        selections remain frozen so explicit resume does not search/reselect.
+        No authentication action is submitted by this feature.
+        """
+        from .automatic_selection import select_ready_batch
+        ids = select_ready_batch(state)
+        if not ids:
+            return
+        if self._cancel.is_set():
+            raise CrawlError('paused')
+        self._save(state, selection=ids, selection_source='query_order',
+                   auto_selection_applied=True, phase='collect', report_id='')
+        self._collect(state, backend, adapter)
 
     def _resume_due(self):
         """Resume only safe read actions in a still-owned browser session.
@@ -1022,10 +1045,12 @@ class GuidedService:
                                 safe = (action in {'search', 'capture', 'collect', 'resume'}
                                         and not getattr(backend, 'auth_mode', False)
                                         and code != 'clock_rollback')
+                                retry = ('resume' if state.get('auto_selection_applied') is True
+                                         and state.get('phase') == 'collect' else action)
                                 self._save(state, code, status='waiting_rate',
                                            wait_seconds=round(exc.wait, 1),
                                            next_allowed_at=exc.next_allowed_at,
-                                           retry_action=action, auto_resume=safe)
+                                           retry_action=retry, auto_resume=safe)
                                 self._cancel.set()  # No background browser requests during deferral.
                             else:
                                 self._save(state,code,status='paused' if code=='paused' else 'waiting_manual',

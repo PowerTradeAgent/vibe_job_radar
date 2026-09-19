@@ -193,6 +193,25 @@ def main():
                     assert all(r['anonymous'] and r['no_credentials'] and r['identified'] for r in server.requests)
                     assert not any('login' in r['path'] or 'apply' in r['path'] for r in server.requests)
                     result['checks'].append('anonymous read sends no login request or credentials; application identity retained')
+                    # Explicit query-order opt-in must complete the same
+                    # pipeline with no UI/manual collect action or login request.
+                    service.create({**query, 'auto_collect': True})
+                    automatic = wait(service)
+                    assert automatic['status'] == 'completed', automatic.get('code')
+                    assert automatic['selection_source'] == 'query_order'
+                    assert automatic['auto_selection_applied'] is True
+                    assert automatic['outcome']['saved'] == 1
+                    assert len(automatic['selection']) == 1
+                    assert automatic['authentication'] == 'not_checked'
+                    assert workspace.report(automatic['report_id'])['manifest']['stats']['full_text_job_groups'] == 1
+                    assert workspace.report(previous_report)
+                    assert not any('login' in r['path'] or 'apply' in r['path'] for r in server.requests)
+                    result['checks'].append('one opted-in create action performs native API-only search, bounded selection, complete JD and original report without login or manual Collect')
+                    service.create({**query, 'keyword': '明确无结果', 'auto_collect': True})
+                    automatic_empty = wait(service)
+                    assert automatic_empty['code'] == 'no_matching_jobs'
+                    assert not automatic_empty['selection'] and not automatic_empty['report_id']
+                    result['checks'].append('automatic mode keeps confirmed empty results empty without selecting stale jobs or creating a report')
                     service.close(); services.clear()
                     # Independent owned thread and fresh native context: a
                     # browser-generated popup must not leak even its first HTTP.

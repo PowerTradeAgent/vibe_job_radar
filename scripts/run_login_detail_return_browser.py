@@ -4,6 +4,7 @@ No external accounts, recruitment data, password input or authentication bypass.
 The test actor alone clicks the fixture's normal login button on the owner thread.
 """
 from __future__ import annotations
+import argparse
 import dataclasses
 import json
 import os
@@ -30,7 +31,10 @@ BODY='岗位职责：负责时间序列预测与模型评估。任职要求：�
 
 def main():
     from playwright.sync_api import expect, sync_playwright
-    out=ROOT/'browser-acceptance'/'login-detail-return';out.mkdir(parents=True,exist_ok=True)
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--automatic', action='store_true')
+    args=parser.parse_args()
+    out=ROOT/'browser-acceptance'/('automatic-collection' if args.automatic else 'login-detail-return');out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'checks':[],'page_errors':[],
             'scope':'Real Chromium UI and production bridge; artificial TLS/HTTP supplier. No live-site or native-backend certification.'}
     calls=[];human_click=threading.Event()
@@ -89,14 +93,21 @@ def main():
                         form=page.locator('#search-form')
                         form.locator('[name=keyword]').fill('时间序列算法工程师')
                         form.locator('[name=rights_note]').fill('仅人工测试，不是真实猎聘授权或数据')
+                        expect(form.locator('[name=auto_collect]')).not_to_be_checked()
+                        if args.automatic:form.locator('[name=auto_collect]').check()
                         form.locator('[name=consent]').check();page.locator('#find').click()
                         expect(page.locator('#cards .card')).to_have_count(2,timeout=30000)
-                        page.locator('#select-all').click();page.locator('#collect').click()
+                        if not args.automatic:
+                            page.locator('#select-all').click();page.locator('#collect').click()
                         expect(page.locator('#task-status')).to_contain_text('需要你操作',timeout=30000)
                         partial=server.guided.state()['jobs'][0]
                         assert [r['status'] for r in partial['cards']]==['ok','manual_required']
+                        assert partial.get('selection_source')==('query_order' if args.automatic else 'manual')
+                        assert bool(partial.get('auto_selection_applied'))==args.automatic
                         first_report=partial['report_id'];first_record=partial['cards'][0]['record_id']
                         result['checks'].append('first selected JD and partial report survive second detail login wall')
+                        if args.automatic:
+                            result['checks'].append('create-time checkbox starts ordinary collection without selecting jobs or clicking Collect; login gate still pauses')
                         page.locator('#auto-login-return').check();page.locator('#login').click()
                         # Wait for the owner-thread action to finish. No navigation,
                         # capture or resume is issued by this UI after login.
