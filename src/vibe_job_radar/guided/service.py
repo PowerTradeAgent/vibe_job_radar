@@ -38,6 +38,7 @@ from .contracts import CrawlError
 from .batch_identity import batch_cards, page_signature, strategy as identity_strategy
 from .checkpoint import decode as decode_checkpoint, binding as checkpoint_binding, ensure_compatible
 from .acquisition_results import analysis_by_record, audit_items
+from .search_scope import conditions as search_conditions, check_scope
 from .login_return import (LoginReturnManager, ReturnedDetail,
                            matching_detail_signature, pending_detail_target)
 from .session_reuse import reuse_current_session
@@ -53,6 +54,7 @@ from .browser_choice import BrowserChoice, CHOICES, validate_choice
 from .. import tls_context
 
 MESSAGES = {
+    'search_scope_changed': '当前列表的关键词、筛选条件或页码与本批不一致，已保留原进度；请回到原查询，或为新条件另建任务。',
     'checkpoint_incompatible': '任务的查询条件、适配器或访问契约与创建时不一致；已有选择和结果保留，请用兼容版本继续或另建任务。',
     'checkpoint_records_missing': '任务中已保存的正文记录缺失或不一致，已停止；请恢复工作区备份，不会把缺失正文算成成功或自动重复抓取。',
     'batch_identity_unsupported': '当前版本无法恢复该批次的岗位标识规则；原选择与记录已保留，请使用兼容版本继续。',
@@ -327,6 +329,12 @@ class GuidedService:
                  'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode,
                  'reuse_current_session': data.get('reuse_current_session', False), 'session_reused': False,
                  'persist_session': data.get('persist_session', False), 'saved_session_status': 'off'}
+        if adapter.key == 'liepin':
+            try:
+                search_conditions(adapter, state['search_url'], keyword)
+            except CrawlError:
+                raise InputError('列表地址必须是同一关键词的猎聘搜索页，且筛选参数不能重复；修改条件请另建任务。') from None
+            state.update(query_scope_version=1, cursors_seen=[])
         state['execution_binding'] = checkpoint_binding(state, adapter)
         with self._lock:
             if self._busy:
@@ -743,6 +751,7 @@ class GuidedService:
                 backend.wire.ensure_robots(page.url)
             with observe(self._trace_for(state), 'list_parse', url=page.url):
                 cards = batch_cards(state, adapter, adapter.cards(page))
+                cursor = check_scope(state, adapter, page.url)
                 if not cards:
                     notify(self._trace_for(state), 'note', code='no_cards')
             if not cards:
@@ -759,7 +768,12 @@ class GuidedService:
                 break
             if len(state['pages_seen']) >= state['max_pages']:
                 raise CrawlError('list_page_limit')
+            if cursor is not None and cursor in state.get('cursors_seen', []):
+                self._save(state, last_list_url=page.url, list_end='repeated_cursor')
+                break
             state['pages_seen'].append(signature)
+            if cursor is not None:
+                state.setdefault('cursors_seen', []).append(cursor)
             existing = {r['id'] for r in state['cards']}
             added = 0
             for card in cards:

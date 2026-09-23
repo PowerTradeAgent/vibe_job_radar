@@ -63,6 +63,11 @@ def decode(path, ident):
         if state.get('identity_strategy', LEGACY) not in {LEGACY, ENTITY_V1}:
             raise ValueError()
         binding = state.get('execution_binding')
+        if 'query_scope_version' in state and (type(state['query_scope_version']) is not int or state['query_scope_version'] != 1):
+            raise ValueError()
+        cursors = state.get('cursors_seen', [])
+        if not isinstance(cursors, list) or len(cursors) > 5 or not all(_text(c, 10) for c in cursors):
+            raise ValueError()
         if binding is not None and (not isinstance(binding, dict) or type(binding.get('version')) is not int
                 or binding['version'] != 1 or set(binding) != {'version', 'adapter', 'backend', 'query', 'consent'}
                 or not all(_text(binding[k], 256) for k in ('adapter', 'backend', 'query', 'consent'))):
@@ -79,6 +84,8 @@ def _digest(value):
 def binding(state, adapter):
     query = {k: state.get(k) for k in ('platform', 'keyword', 'search_url', 'roles', 'max_pages',
              'max_jobs', 'auto_collect', 'identity_strategy', 'rights_note')}
+    if 'query_scope_version' in state:
+        query['query_scope_version'] = state['query_scope_version']
     mode = state.get('backend', 'bridge')
     backend = _digest(asdict(contract_for(adapter))) if mode == 'native' else 'bridge:v1'
     return {'version': 1, 'adapter': f'{adapter.key}:{getattr(adapter, "version", "custom")}',
