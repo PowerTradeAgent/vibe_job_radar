@@ -337,7 +337,7 @@ def main():
                     assert any(r['path']=='/login' and r['method']=='POST' for r in good.requests)
                     result['checks'].append('reviewed native login POST executes only in explicit authentication mode')
                     checkpoint('negative-popup')
-                    b.page.evaluate("() => {window.open('/apply'); window.open('/apply', '_blank', 'noopener');}")
+                    popup_opened = b.page.evaluate("() => {const opened=!!window.open('/apply'); window.open('/apply', '_blank', 'noopener'); return opened;}")
                     deadline = time.monotonic() + 5
                     while time.monotonic() < deadline:
                         # CDP target events can arrive after evaluate returns.
@@ -349,9 +349,12 @@ def main():
                         if (b.error and len(b.context.pages) == 1 and not b._rejected_pages
                                 and not b._pending_rejected_targets):
                             break
-                    assert b.error == 'native_surface_unsupported', b.error
+                    # Chromium may refuse the popup before creating any CDP
+                    # target. Otherwise the controller must report its refusal.
+                    assert b.error == 'native_surface_unsupported' or (b.error is None and not popup_opened), b.error
                     assert len(b.context.pages)==1, 'uncontrolled popup escaped the owned-page boundary'
                     assert not any(r['path']=='/apply' for r in good.requests)
+                    result['popup_refusal'] = b.error or 'browser_open_returned_null'
                     result['checks'].append('script popups, including noopener, do not create uncontrolled requests')
                     b.close();backends.remove(b)
                     for name,path,expected in [('cross','/cross','redirect_requires_attention'),('unknown','/unknown','native_operation_unreviewed'),('origin-auth','/origin-auth','http_401'),('denied','/denied','http_403'),('limited','/limited','http_429')]:
