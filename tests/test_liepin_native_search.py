@@ -175,7 +175,7 @@ class NativeSearchContractTests(unittest.TestCase):
         headers={'Origin':'https://www.liepin.com', 'Access-Control-Request-Method':'POST', 'Access-Control-Request-Headers':'content-type,x-client-type'}
         rule.validate_headers('OPTIONS',headers)
         rule.validate_headers('OPTIONS',{**headers,'Access-Control-Request-Headers':
-            'content-type,x-client-type,x-fscp-bi-stat,x-fscp-fe-version,x-fscp-std-info,x-fscp-trace-id,x-fscp-version,x-requested-with'})
+            'content-type,x-client-type,x-fscp-bi-stat,x-fscp-fe-version,x-fscp-std-info,x-fscp-trace-id,x-fscp-version,x-requested-with,x-xsrf-token'})
         for extra in [{'Access-Control-Request-Method':'DELETE'}, {'Access-Control-Request-Headers':'authorization'}, {'Origin':'https://evil.test'}]:
             with self.subTest(extra=extra),self.assertRaises(CrawlError):rule.validate_headers('OPTIONS',{**headers,**extra})
 

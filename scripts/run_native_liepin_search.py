@@ -325,6 +325,21 @@ def main():
                     finally: b.close()
                     assert sum(r['method']=='POST' for r in server.requests)==before
                     result['checks'].append('publisher OPTIONS denial prevents search POST and is not fabricated as success')
+                    server.deny_cors = False
+                    b = factory(local, RateLedger(root/'blank.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
+                    try:
+                        b.open(local.search_url('时间序列'))
+                        assert b.observations()
+                        before = len(server.requests)
+                        b.page.evaluate("setTimeout(() => location.replace('about:blank'), 0)")
+                        b.page.wait_for_url('about:blank',timeout=5000)
+                        try: b.snapshot()
+                        except Exception as exc:
+                            assert getattr(exc,'code',None)=='native_page_cleared',getattr(exc,'code',None)
+                        else: raise AssertionError('blank navigation returned stale content')
+                        assert not b.observations() and len(server.requests)==before
+                    finally: b.close()
+                    result['checks'].append('a published main document leaving for blank stops with an explicit cause, discards old results and never retries')
                     result['success']=True
     finally:
         for service in services: service.close()

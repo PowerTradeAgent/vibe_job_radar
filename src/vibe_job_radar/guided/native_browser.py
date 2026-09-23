@@ -82,6 +82,7 @@ class NativeBackend(PlaywrightBackend):
         self._auth_attempts = set()
         self._adopting = set()
         self._page_sessions, self._bound_pages = {}, {}
+        self._committed_pages = set()
         self._page_creation = 0
         self._rejected_targets = set()
         self._pending_rejected_targets = []
@@ -257,8 +258,31 @@ class NativeBackend(PlaywrightBackend):
             client.on(method, lambda data, name=method: self._received({
                 'sessionId':session, 'message':json.dumps({'method':name, 'params':data})}))
         page.on('close', lambda *_: self._detached({'sessionId':session}))
+        page.on('framenavigated', lambda frame: self._main_navigation(page, frame))
         self._install_target(session, info)
         super()._bind_page(page)
+
+    def _main_navigation(self, page, frame):
+        """A live page leaving for blank is a stop, not an empty job result.
+
+        Do not infer why it happened, undo the navigation or modify publisher
+        scripts. Initial/scratch/child frames are not collection documents.
+        """
+        if (self._closing or self._loading_robots or page is not self.page
+                or frame != page.main_frame or page not in self._bound_pages):
+            return
+        committed = self.__dict__.setdefault('_committed_pages', set())
+        if frame.url.startswith('https://'):
+            committed.add(page)
+        elif page in committed and frame.url == 'about:blank':
+            self._epoch += 1
+            self._observations.clear()
+            self.__dict__.get('_latest_business', {}).clear()
+            self._observed_bytes = 0
+            with observe(getattr(self, '_diagnostics', None), 'navigation', actor='browser',
+                         resource='document', impact='required_by_backend'):
+                notify(getattr(self, '_diagnostics', None), 'mark', code='native_page_cleared')
+                self._fatal('native_page_cleared')
 
     def _send(self, session, method, params=None, callback=None):
         if self._closing:
@@ -375,6 +399,7 @@ class NativeBackend(PlaywrightBackend):
         for page, bound in tuple(self._bound_pages.items()):
             if bound == session:
                 self._bound_pages.pop(page, None)
+                self.__dict__.get('_committed_pages', set()).discard(page)
         for key in [k for k,v in self._pending.items() if v[0] == session]:
             self._pending.pop(key, None)
         for key in [k for k in self._requests if k[0] == session]:
@@ -639,6 +664,7 @@ class NativeBackend(PlaywrightBackend):
         self._send(session,'Network.getResponseBody',{'requestId':event['requestId']},store)
 
     def snapshot(self):
+        self._check_error()
         return replace(super().snapshot(), business=self.observations())
 
     def observations(self):
@@ -770,4 +796,5 @@ class NativeBackend(PlaywrightBackend):
         self._observations.clear()
         self.__dict__.get('_latest_business', {}).clear(); self._auth_attempts.clear()
         self._page_sessions.clear(); self._bound_pages.clear()
+        self.__dict__.get('_committed_pages', set()).clear()
         self._rejected_targets.clear(); self._pending_rejected_targets.clear(); self._rejected_pages.clear()

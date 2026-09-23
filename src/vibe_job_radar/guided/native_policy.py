@@ -126,7 +126,7 @@ def liepin_bootstrap():
     search = r'/api/com\.liepin\.searchfront4c\.pc-search-job'
     cors = dict(cors_origin='https://' + host, cors_headers=(
         'content-type', 'x-client-type', 'x-fscp-version', 'x-requested-with',
-        'x-fscp-std-info', 'x-fscp-trace-id', 'x-fscp-fe-version', 'x-fscp-bi-stat'))
+        'x-fscp-std-info', 'x-fscp-trace-id', 'x-fscp-fe-version', 'x-fscp-bi-stat', 'x-xsrf-token'))
     passport = 'api-passport.liepin.com'
     login = r'/api/com\.liepin\.passport\.account\.(?:account-pwd-login|check-login|v2\.check-login|get-category)'
     manifest = 'feim.liepin.com'

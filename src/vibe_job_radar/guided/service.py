@@ -141,6 +141,7 @@ MESSAGES.update({
     'native_operation_unreviewed': '页面需要尚未核实的业务请求或依赖。请预览脱敏诊断；不是搜索结果为空，需继续维护站点适配。',
     'native_surface_unsupported': '当前原生实验暂不支持此框架或后台执行面，已停止该请求。',
     'native_protocol_error': '浏览器原生拦截协议未完成，已停止；未回退至其他后端。',
+    'native_page_cleared': '平台页面已跳转到空白，读取已停止。请先确认平台在本机的正常访问方式，再继续原任务。',
     'native_proxy_auth_failed': '应用专用本机连接校验失败；没有使用账号密码或绕过所选代理。',
     'native_policy_changed': '网络偏好已变更，原生会话已停止。请明确继续以建立使用新偏好的会话；配额保持。',
     'native_observation_limit': '原生业务响应或观察队列超过上限，已保留已有结果并停止。',
