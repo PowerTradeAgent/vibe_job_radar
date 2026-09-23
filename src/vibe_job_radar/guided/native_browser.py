@@ -485,11 +485,12 @@ class NativeBackend(PlaywrightBackend):
     def _paused(self, session, event):
         request = event['request']; url = request['url']; kind=event.get('resourceType','Other')
         response = 'responseStatusCode' in event or 'responseErrorReason' in event
+        ignored = not response and self.contract.ignored_request(url, request['method'], kind)
         resource = {'XHR':'xhr','Fetch':'fetch','Document':'document','Stylesheet':'stylesheet',
                     'Script':'script','Image':'image','Font':'font','Media':'media'}.get(kind,'other')
         with observe(getattr(self,'_diagnostics',None), 'http_request' if response else 'route',
                 actor='browser', url=url, method=request['method'], resource=resource,
-                impact='optional' if resource in {'script','stylesheet','image','font','media'} else 'required_by_backend'):
+                impact='optional' if ignored or resource in {'script','stylesheet','image','font','media'} else 'required_by_backend'):
             try:
                 if self.cancelled.is_set():
                     raise CrawlError('paused')
@@ -497,6 +498,11 @@ class NativeBackend(PlaywrightBackend):
                     raise CrawlError('native_policy_changed')
                 if self._halted:
                     raise self.wait_error or CrawlError(self.error or 'site_stopped')
+                if ignored:
+                    notify(getattr(self,'_diagnostics',None),'mark',code='native_optional_request_blocked')
+                    self.native_counts['blocked'] += 1
+                    self._send(session,'Fetch.failRequest',{'requestId':event['requestId'],'errorReason':'BlockedByClient'})
+                    return
                 if response:
                     self._response_paused(session,event)
                 else:

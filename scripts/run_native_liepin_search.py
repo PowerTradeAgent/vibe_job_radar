@@ -29,6 +29,7 @@ from vibe_job_radar.guided.native_policy import contract_for, NativeRule
 API_HOST = 'api.' + HOST
 CDN_HOST = 'static.' + HOST
 LOGIN_HOST = 'login.' + HOST
+OPTIONAL_HOST = 'optional.' + HOST
 PATH = '/api/com.liepin.searchfront4c.pc-search-job'
 ASSET = '/fe-www-pc/v6/js/search-fixture.js'
 
@@ -86,7 +87,12 @@ class SearchFixture:
                               '<iframe id="common-footer" src="https://' + CDN_HOST + '/footer"></iframe>'
                               '<div id="loaded"></div><script src="https://' + CDN_HOST + ASSET + '"></script>')
                 elif path == ASSET:
-                    self.send("""const key = new URL(location.href).searchParams.get('key');
+                    self.send("""window.optionalBlocked = 0;
+for (const path of ['/api/com.liepin.cbp.baizhong.op.v2-show-4pc', '/statisticPlatform/standardFLog.json']) {
+ fetch('https://""" + OPTIONAL_HOST + """' + path, {method:'POST',
+ headers:{'Content-Type':'application/json'},body:'{}'}).catch(() => window.optionalBlocked++);
+}
+const key = new URL(location.href).searchParams.get('key');
 fetch('https://""" + API_HOST + PATH + """', {
  method:'POST', headers:{'Content-Type':'application/json','X-Client-Type':'web'},
  body: JSON.stringify({data:{mainSearchPcConditionForm:{key,currentPage:0,pageSize:40}}})
@@ -153,9 +159,10 @@ def main():
                 contract = contract_for(template)
                 mapping = {'www.liepin.com':HOST, 'api-c.liepin.com':API_HOST,
                            'concat.lietou-static.com':CDN_HOST, 'image0.lietou-static.com':CDN_HOST,
-                           'api-passport.liepin.com':LOGIN_HOST}
+                           'api-passport.liepin.com':LOGIN_HOST, 'feim.liepin.com':CDN_HOST}
                 rules = tuple(replace(r, host=mapping[r.host], cors_origin=URL if r.cors_origin else '') for r in contract.rules)
-                local_contract = replace(contract, hosts=(HOST,API_HOST,CDN_HOST,LOGIN_HOST), rules=rules)
+                local_contract = replace(contract, hosts=(HOST,API_HOST,CDN_HOST,LOGIN_HOST), rules=rules,
+                    ignored_rules=tuple(replace(r,host=OPTIONAL_HOST) for r in contract.ignored_rules))
                 local = replace(template, domains=(HOST,), resource_domains=(HOST,),
                     search_base=URL+'/zhaopin/', login_url=URL+'/', native_contract=local_contract)
                 real_dns, real_dial = socket.getaddrinfo, socket.create_connection
@@ -194,6 +201,12 @@ def main():
                     native = service._backends[task['id']]
                     assert native.native_counts['business']==2, 'POST and preflight must both be accounted'
                     result['checks'].append('native CDN script and cross-origin preflight/search POST supply a candidate without DOM links or login')
+                    # All outside DNS/dials above raise; ignored preflights must
+                    # terminate locally while the real search/report succeeds.
+                    assert not any(r['host']==OPTIONAL_HOST for r in server.requests)
+                    assert any(e['code']=='native_optional_request_blocked' and e['impact']=='optional'
+                               for e in service.diagnostics({'id':task['id']})['events'])
+                    result['checks'].append('known marketing/statistics requests are aborted before network access without aborting search or report')
                     assert not any(r['path']=='/robots-error-must-not-run' for r in server.requests)
                     result['checks'].append('API robots 404 is distinguished from refusal; its HTML error body cannot execute scripts or fetch resources')
                     assert not any(r['path']=='/footer' for r in server.requests)

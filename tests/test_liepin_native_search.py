@@ -174,6 +174,8 @@ class NativeSearchContractTests(unittest.TestCase):
         rule = self.contract.match(API,'OPTIONS','Preflight')
         headers={'Origin':'https://www.liepin.com', 'Access-Control-Request-Method':'POST', 'Access-Control-Request-Headers':'content-type,x-client-type'}
         rule.validate_headers('OPTIONS',headers)
+        rule.validate_headers('OPTIONS',{**headers,'Access-Control-Request-Headers':
+            'content-type,x-client-type,x-fscp-bi-stat,x-fscp-fe-version,x-fscp-std-info,x-fscp-trace-id,x-fscp-version,x-requested-with'})
         for extra in [{'Access-Control-Request-Method':'DELETE'}, {'Access-Control-Request-Headers':'authorization'}, {'Origin':'https://evil.test'}]:
             with self.subTest(extra=extra),self.assertRaises(CrawlError):rule.validate_headers('OPTIONS',{**headers,**extra})
 
@@ -182,6 +184,26 @@ class NativeSearchContractTests(unittest.TestCase):
         self.assertEqual(self.contract.match(url,'GET','Stylesheet').role,'asset')
         for method,resource in [('POST','Fetch'),('GET','Document')]:
             with self.subTest(method=method),self.assertRaises(CrawlError):self.contract.match(url,method,resource)
+
+    def test_published_search_filter_initialization_is_exact_and_origin_bound(self):
+        url=API+'-cond-init'
+        rule=self.contract.match(url,'POST','XHR')
+        self.assertEqual(rule.key,'liepin_search_filters')
+        rule.validate_headers('POST',{'Origin':'https://www.liepin.com'})
+        with self.assertRaises(CrawlError):rule.validate_headers('POST',{'Origin':'https://other.test'})
+        self.assertEqual(self.contract.match(url,'OPTIONS','XHR').key,'liepin_filters_preflight')
+        for changed in [API+'-cond-update',url+'/extra']:
+            with self.assertRaises(CrawlError):self.contract.match(changed,'POST','XHR')
+
+    def test_shared_ui_manifest_is_only_a_static_read_not_chat_permission(self):
+        self.assertEqual(self.contract.match('https://feim.liepin.com/lp-manifest.json','GET','XHR').role,'asset')
+        self.assertEqual(self.contract.match('https://feim.liepin.com/lp-manifest.js','GET','Script').role,'asset')
+        self.assertEqual(self.contract.match('https://concat.lietou-static.com/fe-im-pc/v6/remote.js','GET','Script').role,'asset')
+        for url,method,resource in [('https://feim.liepin.com/lp-manifest.json','POST','XHR'),
+                                    ('https://feim.liepin.com/lp-manifest.json','GET','Document'),
+                                    ('https://feim.liepin.com/api/messages','GET','XHR'),
+                                    ('https://concat.lietou-static.com/fe-im-pc/v6/remote.js','POST','Fetch')]:
+            with self.subTest(url=url,method=method),self.assertRaises(CrawlError):self.contract.match(url,method,resource)
 
     def test_login_still_not_assumed_from_cookies(self):
         for auth in (False, True):

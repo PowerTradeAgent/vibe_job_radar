@@ -28,7 +28,7 @@ RESOURCES = frozenset({'document', 'stylesheet', 'script', 'image', 'media', 'fo
     'xhr', 'fetch', 'websocket', 'other', 'unknown'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
     tls_verification_failed tls_handshake_failed http_401 http_403 http_429
-    robots_denied robots_unavailable resource_domain_blocked write_not_allowed
+    robots_denied robots_unavailable resource_domain_blocked write_not_allowed native_optional_request_blocked
     method_blocked redirect_requires_attention login_origin_changed invalid_url
     wrong_platform credential_url not_job_url not_job_list manual_required
     login_form_changed login_credentials_rejected login_password_submitted job_unavailable invalid_page_observation
@@ -66,6 +66,7 @@ LOCAL_POLICIES = {
     'response_too_large': 'response_size', 'request_too_large': 'request_size',
     'request_headers_invalid': 'header_validation', 'request_headers_conflict': 'header_validation',
     'paused': 'cancellation', 'native_operation_unreviewed': 'native_site_contract',
+    'native_optional_request_blocked': 'native_optional_dependency',
     'native_surface_unsupported': 'native_surface_policy', 'native_policy_changed': 'workspace_policy',
     'native_observation_limit': 'native_response_limit',
 }
