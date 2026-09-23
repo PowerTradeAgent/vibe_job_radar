@@ -786,6 +786,11 @@ class NativeBackend(PlaywrightBackend):
         if not self._closing and not getattr(self, 'policy_check', lambda: True)():
             self._fatal('native_policy_changed')
         super().pump()
+        # A page can clear itself after open() returned while the service waits
+        # for normal login. Surface the fatal event on the owning worker then,
+        # instead of leaving the UI indefinitely claiming the login page is open.
+        if not self._closing and self.error:
+            raise self.wait_error or CrawlError(self.error)
 
     def close(self):
         self._closing=True

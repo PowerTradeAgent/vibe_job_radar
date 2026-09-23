@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from vibe_job_radar.guided.adapters import Registry, builtins
 from vibe_job_radar.guided.checkpoint import ensure_compatible
@@ -162,3 +162,32 @@ class CheckpointTests(unittest.TestCase):
         state['cards'][0]['body_sha256'] = 'f'*64
         with self.assertRaises(CrawlError) as caught: self.service._selected_records(state)
         self.assertEqual(caught.exception.code, 'checkpoint_records_missing')
+
+    def test_reader_holds_service_lock_until_file_handle_is_closed(self):
+        import threading
+        from vibe_job_radar.guided.checkpoint import decode
+        state = self.create(); reading = threading.Event(); release = threading.Event()
+        attempted = threading.Event(); saved = threading.Event(); errors = []
+        def read(path, ident):
+            reading.set()
+            if not release.wait(3): raise AssertionError('reader not released')
+            return decode(path, ident)
+        def reader():
+            try: self.service._load(state['id'])
+            except Exception as exc: errors.append(exc)
+        def writer():
+            attempted.set()
+            try: self.service._save(state, 'paused', status='paused'); saved.set()
+            except Exception as exc: errors.append(exc)
+        with patch('vibe_job_radar.guided.service.decode_checkpoint', read):
+            read_thread = threading.Thread(target=reader); read_thread.start()
+            try:
+                self.assertTrue(reading.wait(2))
+                write_thread = threading.Thread(target=writer); write_thread.start()
+                self.assertTrue(attempted.wait(2))
+                self.assertFalse(saved.wait(.05))
+            finally:
+                release.set(); read_thread.join(3)
+                if 'write_thread' in locals(): write_thread.join(3)
+        self.assertFalse(errors); self.assertTrue(saved.is_set())
+        self.assertEqual(self.service._load(state['id'])['status'], 'paused')

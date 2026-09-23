@@ -192,7 +192,8 @@ class ReturnServiceTests(unittest.TestCase):
         while self.service._load(self.ident).get('login_continuation')!='resumed' and time.monotonic()<until:time.sleep(.02)
         self.wait()
         state=self.service._load(self.ident)
-        self.assertEqual(state['status'],'ready')
+        self.assertEqual(state['status'],'ready',
+                         {k:state.get(k) for k in ('code','login_continuation','authentication')})
         self.assertEqual(state['login_continuation'],'resumed')
         self.assertEqual(state['authentication'],'user_resumed')
         self.service.action({'id':self.ident,'action':'collect','selected':[state['cards'][0]['id']]});self.wait()

@@ -207,7 +207,10 @@ class GuidedService:
         return p
 
     def _load(self, ident):
-        return decode_checkpoint(self._path(ident), ident)
+        # On Windows an open reader can deny os.replace(). Serialize local
+        # reads with _save so polling cannot cancel a login-return checkpoint.
+        with self._lock:
+            return decode_checkpoint(self._path(ident), ident)
 
     def _save(self, state, code=None, **changes):
         with self._lock:
@@ -1077,15 +1080,41 @@ class GuidedService:
                 except (InputError, OSError, ValueError):
                     continue
 
+    def _pump_idle(self):
+        for ident, backend in list(self._backends.items()):
+            with self._lock:
+                if self._busy:
+                    return
+            try:
+                backend.pump()
+            except Exception as exc:
+                code = exc.code if isinstance(exc, CrawlError) else 'operation_error'
+                if code == 'paused':
+                    continue
+                with self._lock:
+                    # Pumping yields to UI actions. A new action, stop or
+                    # backend replacement wins over this older observation.
+                    if (self._busy or self._shutdown.is_set() or self._cancel.is_set()
+                            or self._backends.get(ident) is not backend):
+                        continue
+                    try:
+                        state = self._load(ident)
+                    except InputError:
+                        continue
+                    if state['status'] != 'waiting_manual' or (state['code'] == code
+                            and state.get('login_continuation') == 'needs_attention'):
+                        continue
+                    self._login_return.disarm(ident)
+                    self._save(state, code, login_continuation='needs_attention',
+                               auto_resume=False, next_allowed_at=None)
+
     def _worker(self):
         while not self._shutdown.is_set():
             try:
                 action, ident, secret = self._queue.get(timeout=0.1)
             except queue.Empty:
                 self._resume_due()
-                for backend in list(self._backends.values()):
-                    try: backend.pump()
-                    except Exception: pass
+                self._pump_idle()
                 try:
                     self._login_return.tick(self)
                 except Exception:
