@@ -1,6 +1,6 @@
 """Explicit, local-only CORS search -> actual Liepin adapter -> report test.
 
-Three artificial HTTPS hosts use a fresh isolated test CA and the existing
+Four artificial HTTPS hosts use a fresh isolated test CA and the existing
 native tunnel. No real platform traffic, credentials or request replay.
 """
 from __future__ import annotations
@@ -28,6 +28,7 @@ from vibe_job_radar.guided.native_policy import contract_for, NativeRule
 
 API_HOST = 'api.' + HOST
 CDN_HOST = 'static.' + HOST
+LOGIN_HOST = 'login.' + HOST
 PATH = '/api/com.liepin.searchfront4c.pc-search-job'
 ASSET = '/fe-www-pc/v6/js/search-fixture.js'
 
@@ -131,21 +132,22 @@ def main():
     if not args.controlled:
         print('No requests; use --controlled for the local artificial-source test.'); return
     out = ROOT / 'browser-acceptance/native'; out.mkdir(parents=True, exist_ok=True)
-    result = {'success':False,'scope':'Three artificial TLS hosts, actual native backend and Liepin adapter; not live certification.', 'checks':[]}
+    result = {'success':False,'scope':'Four artificial TLS hosts, actual native backend and Liepin adapter; not live certification.', 'checks':[]}
     services = []; server = None
     try:
         with tempfile.TemporaryDirectory(prefix='radar-search-fixture-') as tmp, ExitStack() as cleanup:
             root = Path(tmp)
             cleanup.callback(lambda: [s.close() for s in services])
-            with trust_fixture(root, (API_HOST, CDN_HOST)):
+            with trust_fixture(root, (API_HOST, CDN_HOST, LOGIN_HOST)):
                 server = SearchFixture(root)
                 cleanup.callback(server.close)
                 template = builtins().get('liepin')
                 contract = contract_for(template)
                 mapping = {'www.liepin.com':HOST, 'api-c.liepin.com':API_HOST,
-                           'concat.lietou-static.com':CDN_HOST, 'image0.lietou-static.com':CDN_HOST}
+                           'concat.lietou-static.com':CDN_HOST, 'image0.lietou-static.com':CDN_HOST,
+                           'api-passport.liepin.com':LOGIN_HOST}
                 rules = tuple(replace(r, host=mapping[r.host], cors_origin=URL if r.cors_origin else '') for r in contract.rules)
-                local_contract = replace(contract, hosts=(HOST,API_HOST,CDN_HOST), rules=rules)
+                local_contract = replace(contract, hosts=(HOST,API_HOST,CDN_HOST,LOGIN_HOST), rules=rules)
                 local = replace(template, domains=(HOST,), resource_domains=(HOST,),
                     search_base=URL+'/zhaopin/', login_url=URL+'/', native_contract=local_contract)
                 real_dns, real_dial = socket.getaddrinfo, socket.create_connection

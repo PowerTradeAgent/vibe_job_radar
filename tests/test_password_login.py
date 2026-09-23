@@ -125,6 +125,17 @@ class PasswordServiceTests(unittest.TestCase):
         self.service._run('login', state, None)
         self.assertEqual(backend.calls, [(state['search_url'], True)])
 
+    def test_other_platform_retains_its_separate_login_entry(self):
+        adapter = builtins().get('boss')
+        self.service.registry.register(adapter)
+        ident = self.service.create({'platform': 'boss', 'keyword': '时间序列',
+            'consent': True, 'rights_note': 'synthetic separate login entry'})['id']
+        self.service.action({'id': ident, 'action': 'login', 'auto_continue': True})
+        state = self.service._load(ident)
+        backend = MemoryBackend(); self.service._backends[ident] = backend
+        self.service._run('login', state, None)
+        self.assertEqual(backend.calls, [(adapter.login_url, True)])
+
     def test_worker_discards_credentials_even_if_navigation_fails(self):
         original_submit = GuidedService._submit.__get__(self.service)
         self.service._submit = original_submit

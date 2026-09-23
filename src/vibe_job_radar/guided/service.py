@@ -925,7 +925,10 @@ class GuidedService:
             target = pending_detail_target(state) if watching else None
             # An explicit opt-in login for an interrupted selection stays on
             # that job's native login gate, rather than discarding it for a homepage.
-            url = target.expected_url if target else (state['search_url'] if watching else adapter.login_url)
+            # Only Liepin's observed same-page login supports keeping a search
+            # surface open. Other adapters may require a separate login URL.
+            inline_login = watching and adapter.key == 'liepin'
+            url = target.expected_url if target else (state['search_url'] if inline_login else adapter.login_url)
             try:
                 backend.open(url, authentication=True)
             except CrawlError as exc:
