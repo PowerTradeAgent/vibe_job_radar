@@ -13,12 +13,14 @@ import json
 import math
 import queue
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import threading
 import uuid
 from dataclasses import asdict
+from contextlib import closing
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -34,6 +36,7 @@ from .native_policy import capability as native_capability, contract_for
 from ..network_policy import current_policy
 from .contracts import CrawlError
 from .batch_identity import batch_cards, page_signature, strategy as identity_strategy
+from .checkpoint import decode as decode_checkpoint, binding as checkpoint_binding, ensure_compatible
 from .login_return import (LoginReturnManager, ReturnedDetail,
                            matching_detail_signature, pending_detail_target)
 from .session_reuse import reuse_current_session
@@ -49,6 +52,8 @@ from .browser_choice import BrowserChoice, CHOICES, validate_choice
 from .. import tls_context
 
 MESSAGES = {
+    'checkpoint_incompatible': '任务的查询条件、适配器或访问契约与创建时不一致；已有选择和结果保留，请用兼容版本继续或另建任务。',
+    'checkpoint_records_missing': '任务中已保存的正文记录缺失或不一致，已停止；请恢复工作区备份，不会把缺失正文算成成功或自动重复抓取。',
     'batch_identity_unsupported': '当前版本无法恢复该批次的岗位标识规则；原选择与记录已保留，请使用兼容版本继续。',
     'login_form_changed': '未找到可确认的猎聘密码登录表单，已停止自动填写。请在采集浏览器检查页面并正常登录。',
     'login_password_submitted': '已在猎聘正常表单提交一次。请查看平台反馈；协议、验证码或短信验证需在该页面完成。原搜索或所选完整岗位可读后自动继续，不会重复提交密码。',
@@ -201,10 +206,7 @@ class GuidedService:
         return p
 
     def _load(self, ident):
-        try:
-            return json.loads(self._path(ident).read_text(encoding='utf-8'))
-        except (OSError, ValueError) as exc:
-            raise InputError('任务不存在或文件损坏。') from exc
+        return decode_checkpoint(self._path(ident), ident)
 
     def _save(self, state, code=None, **changes):
         with self._lock:
@@ -233,12 +235,14 @@ class GuidedService:
     def state(self, data=None):
         with self._lock:
             jobs = []
+            checkpoint_warnings = []
             for path in sorted(self.root.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)[:30]:
                 if path.is_symlink():
                     continue
                 try:
                     item = self._load(path.stem)
                 except InputError:
+                    checkpoint_warnings.append('有任务文件损坏或版本不兼容，未加载且未改动原文件。')
                     continue
                 if item['status'] in {'queued', 'running'} and item['id'] != self._active:
                     item.update(status='interrupted', code='interrupted', message=MESSAGES['interrupted'])
@@ -247,11 +251,13 @@ class GuidedService:
                                                       and item['browser_open']
                                                       and item['status'] == 'waiting_rate')
                 item['backend'] = item.get('backend', 'bridge')
+                item['checkpoint_compatibility'] = ('versioned' if item.get('execution_binding') else 'legacy_unversioned')
                 backend = self._backends.get(item['id'])
                 if item['backend'] == 'native' and backend is not None:
                     item['native_requests'] = dict(getattr(backend, 'native_counts', {}))
                 jobs.append(item)
             return {'jobs': jobs, 'busy': self._busy, 'active': self._active,
+                    'checkpoint_warnings': list(dict.fromkeys(checkpoint_warnings)),
                     'sites': [{**site, 'native': native_capability(self.registry.get(site['key']))}
                               for site in self.registry.describe()], 'limits': asdict(self.ledger.limits),
                     'browser_package': self._package(), 'installation': self._last_install,
@@ -317,6 +323,7 @@ class GuidedService:
                  'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode,
                  'reuse_current_session': data.get('reuse_current_session', False), 'session_reused': False,
                  'persist_session': data.get('persist_session', False), 'saved_session_status': 'off'}
+        state['execution_binding'] = checkpoint_binding(state, adapter)
         with self._lock:
             if self._busy:
                 raise InputError('已有任务运行，请先暂停。')
@@ -858,6 +865,34 @@ class GuidedService:
                 'target_jobs': target_jobs, 'ai_jobs': ai_jobs,
                 'scope': 'selected batch only; saved is not target match or live-site certification'}
 
+    def _selected_records(self, state):
+        selected = set(state['selection'])
+        rows = [c for c in state['cards'] if c['id'] in selected and c['status'] == 'ok']
+        if not rows:
+            return []
+        if not self.workspace.db.is_file():
+            raise CrawlError('checkpoint_records_missing')
+        ids = {c['record_id'] for c in rows}
+        try:
+            with closing(sqlite3.connect(self.workspace.db.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+                bodies = db.execute('SELECT body FROM records WHERE record_id IN (' +
+                                    ','.join('?' for _ in ids) + ')', tuple(ids)).fetchall()
+                records = {}
+                for (body,) in bodies:
+                    record = JobRecord.from_dict(json.loads(body))
+                    records[record.record_id] = record
+            if set(records) != ids:
+                raise ValueError()
+            for row in rows:
+                record = records[row['record_id']]
+                if (record.platform != state['platform'] or record.evidence_level != 'full_text'
+                        or record.source_mode != 'browser_fetch' or record.is_synthetic
+                        or (row.get('body_sha256') and row['body_sha256'] != hashlib.sha256(record.text.encode()).hexdigest())):
+                    raise ValueError()
+            return list(records.values())
+        except (ValueError, TypeError, KeyError, sqlite3.Error):
+            raise CrawlError('checkpoint_records_missing') from None
+
     @traced('report', 'service', state_index=0)
     def _finalize_report(self, state, adapter):
         selected = set(state['selection'])
@@ -869,9 +904,7 @@ class GuidedService:
         with writer_lock(self.workspace.root):
             report_id = uuid.uuid4().hex
             report_root = self.workspace.root/'reports'/report_id
-            selected_records = {c['record_id'] for c in state['cards'] if c['id'] in selected and c['status']=='ok'}
-            with Store(self.workspace.db) as store:
-                records = [r for r in store.records(latest_only=False) if r.record_id in selected_records]
+            records = self._selected_records(state)
             with tempfile.TemporaryDirectory(prefix='.batch-',dir=self.root) as tmp:
                 batch_db = Path(tmp)/'batch.sqlite'
                 with Store(batch_db) as batch:
@@ -908,6 +941,8 @@ class GuidedService:
             self._cancel.set()
             self._save(state,'paused',status='paused'); return
         adapter = self.registry.get(state['platform'])
+        ensure_compatible(state, adapter)
+        self._selected_records(state)
         if action in {'login', 'login_password'}:
             try:
                 self.ledger.reserve(adapter.key, 'login')

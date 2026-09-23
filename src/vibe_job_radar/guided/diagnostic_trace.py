@@ -53,7 +53,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     robots_inspection_truncated no_cards no_records native_administrator_blocked native_contract_unavailable
     native_contract_invalid native_operation_unreviewed native_surface_unsupported
     native_protocol_error native_proxy_auth_failed native_policy_changed native_observation_limit native_page_cleared
-    native_unaccounted_response native_business_response_invalid'''.split())
+    native_unaccounted_response native_business_response_invalid checkpoint_incompatible checkpoint_records_missing batch_identity_unsupported'''.split())
 WAITS = frozenset({'paused', 'rate_wait', 'publisher_wait', 'cooldown', 'http_429',
     'hourly_limit', 'daily_limit', 'login_rate_limited'})
 LOCAL_POLICIES = {
