@@ -33,6 +33,7 @@ from .native_browser import NativeBackend
 from .native_policy import capability as native_capability, contract_for
 from ..network_policy import current_policy
 from .contracts import CrawlError
+from .batch_identity import batch_cards, page_signature, strategy as identity_strategy
 from .login_return import (LoginReturnManager, ReturnedDetail,
                            matching_detail_signature, pending_detail_target)
 from .session_reuse import reuse_current_session
@@ -48,6 +49,7 @@ from .browser_choice import BrowserChoice, CHOICES, validate_choice
 from .. import tls_context
 
 MESSAGES = {
+    'batch_identity_unsupported': '当前版本无法恢复该批次的岗位标识规则；原选择与记录已保留，请使用兼容版本继续。',
     'login_form_changed': '未找到可确认的猎聘密码登录表单，已停止自动填写。请在采集浏览器检查页面并正常登录。',
     'login_password_submitted': '已在猎聘正常表单提交一次。请查看平台反馈；协议、验证码或短信验证需在该页面完成。原搜索或所选完整岗位可读后自动继续，不会重复提交密码。',
     'invalid_page_observation': '页面观察无效，已保留任务并停止读取。',
@@ -311,6 +313,7 @@ class GuidedService:
                  'phase': 'search', 'selection': [], 'created_at': utc_now(), 'updated_at': utc_now(),
                  'auto_collect': data.get('auto_collect', False), 'auto_selection_applied': False,
                  'authentication': 'not_checked', 'certification': 'not_live_verified',
+                 'identity_strategy': identity_strategy(adapter),
                  'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode,
                  'reuse_current_session': data.get('reuse_current_session', False), 'session_reused': False,
                  'persist_session': data.get('persist_session', False), 'saved_session_status': 'off'}
@@ -715,7 +718,7 @@ class GuidedService:
             raise CrawlError('list_page_limit')
         if more and not backend.next_page():
             self._save(state, 'ready' if state['cards'] else 'empty_list', status='ready',
-                       list_end='no_next_button')
+                       phase='select', list_end='no_next_button')
             return
         # Even at the page budget, inspect the current surface. Previously the
         # loop was skipped and a login/detail/empty page was reported as ready
@@ -727,31 +730,43 @@ class GuidedService:
             if hasattr(backend, 'wire'):
                 backend.wire.ensure_robots(page.url)
             with observe(self._trace_for(state), 'list_parse', url=page.url):
-                cards = adapter.cards(page)
+                cards = batch_cards(state, adapter, adapter.cards(page))
                 if not cards:
                     notify(self._trace_for(state), 'note', code='no_cards')
             if not cards:
                 if getattr(adapter, 'confirmed_empty', lambda _: False)(page):
-                    self._save(state, 'no_matching_jobs', status='ready', phase='select',
+                    self._save(state, 'ready' if state['cards'] else 'no_matching_jobs', status='ready', phase='select',
                                last_list_url=page.url, list_end='confirmed_empty')
                     return
                 self._save(state, 'empty_list', status='waiting_manual', phase='select',
                            last_list_url=page.url)
                 return
-            signature = hashlib.sha256('\n'.join(c.id for c in cards).encode()).hexdigest()
+            signature = page_signature(state, cards)
             if signature in state['pages_seen']:
-                self._save(state, last_list_url=page.url)
+                self._save(state, last_list_url=page.url, list_end='repeated_page')
                 break
             if len(state['pages_seen']) >= state['max_pages']:
                 raise CrawlError('list_page_limit')
             state['pages_seen'].append(signature)
             existing = {r['id'] for r in state['cards']}
+            added = 0
             for card in cards:
                 if card.id not in existing and len(state['cards']) < 100:
                     state['cards'].append({**asdict(card), 'status': 'discovered', 'record_id': '', 'resolved_url': ''})
                     existing.add(card.id)
+                    added += 1
             self._save(state, 'reading', status='running', last_list_url=page.url)
-            if len(state['pages_seen']) >= state['max_pages'] or not backend.next_page():
+            if not added:
+                self._save(state, list_end='no_new_entities')
+                break
+            if len(state['cards']) >= 100:
+                self._save(state, list_end='card_limit')
+                break
+            if len(state['pages_seen']) >= state['max_pages']:
+                self._save(state, list_end='page_limit')
+                break
+            if not backend.next_page():
+                self._save(state, list_end='no_next_button')
                 break
         self._save(state, 'ready' if state['cards'] else 'empty_list', status='ready' if state['cards'] else 'waiting_manual', phase='select')
 
