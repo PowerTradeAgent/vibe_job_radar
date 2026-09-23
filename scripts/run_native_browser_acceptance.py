@@ -38,6 +38,7 @@ from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.guided.adapters import DOMAdapter, Registry
 from vibe_job_radar.guided.liepin import LiepinAdapter
 from vibe_job_radar.guided.native_policy import NativeRule
+from vibe_job_radar.guided.contracts import CrawlError
 from vibe_job_radar.store import Store
 from vibe_job_radar.guided.diagnostic_trace import DiagnosticTrace
 from vibe_job_radar.network_policy import NetworkPolicy,use_policy
@@ -337,11 +338,17 @@ def main():
                     result['checks'].append('reviewed native login POST executes only in explicit authentication mode')
                     checkpoint('negative-popup')
                     b.page.evaluate("() => {window.open('/apply'); window.open('/apply', '_blank', 'noopener');}")
-                    try:
-                        b.pump()  # Drain owned targets and surface the refusal to the worker.
-                    except CrawlError as exc:
-                        assert exc.code == 'native_surface_unsupported', exc.code
-                    b.page.wait_for_timeout(150)
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        # CDP target events can arrive after evaluate returns.
+                        # Await the refusal while the owner drains both popups.
+                        try:
+                            b.pump()
+                        except CrawlError as exc:
+                            assert exc.code == 'native_surface_unsupported', exc.code
+                        if (b.error and len(b.context.pages) == 1 and not b._rejected_pages
+                                and not b._pending_rejected_targets):
+                            break
                     assert b.error == 'native_surface_unsupported', b.error
                     assert len(b.context.pages)==1, 'uncontrolled popup escaped the owned-page boundary'
                     assert not any(r['path']=='/apply' for r in good.requests)
