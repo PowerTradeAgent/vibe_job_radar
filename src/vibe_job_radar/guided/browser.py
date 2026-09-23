@@ -192,7 +192,8 @@ class PlaywrightBackend:
                 raise CrawlError('resource_domain_blocked')
             if method not in {'GET', 'HEAD', 'POST', 'OPTIONS'}:
                 raise CrawlError('method_blocked')
-            if self.adapter.key == 'liepin' and method in {'POST', 'OPTIONS'}:
+            if (self.adapter.key == 'liepin' and self.adapter.login_url == 'https://www.liepin.com/'
+                    and method in {'POST', 'OPTIONS'}):
                 # Use the same exact, observed operations as the native backend;
                 # adding a login host must not grant every write on that host.
                 from .native_policy import contract_for

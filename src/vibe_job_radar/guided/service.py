@@ -927,7 +927,8 @@ class GuidedService:
             # that job's native login gate, rather than discarding it for a homepage.
             # Only Liepin's observed same-page login supports keeping a search
             # surface open. Other adapters may require a separate login URL.
-            inline_login = watching and adapter.key == 'liepin'
+            inline_login = (watching and adapter.key == 'liepin'
+                            and adapter.login_url == 'https://www.liepin.com/')
             url = target.expected_url if target else (state['search_url'] if inline_login else adapter.login_url)
             try:
                 backend.open(url, authentication=True)

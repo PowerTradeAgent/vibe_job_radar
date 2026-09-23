@@ -1,5 +1,6 @@
 """No real account or provider request: exercise queue privacy and login policy."""
 import json
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import time
@@ -133,6 +134,15 @@ class PasswordServiceTests(unittest.TestCase):
         self.service.action({'id': ident, 'action': 'login', 'auto_continue': True})
         state = self.service._load(ident)
         backend = MemoryBackend(); self.service._backends[ident] = backend
+        self.service._run('login', state, None)
+        self.assertEqual(backend.calls, [(adapter.login_url, True)])
+
+    def test_custom_liepin_origin_keeps_its_declared_login_entry(self):
+        adapter = replace(ADAPTER, login_url='https://www.liepin.com/custom-login')
+        self.service.registry = Registry([adapter])
+        self.service.action({'id': self.ident, 'action': 'login', 'auto_continue': True})
+        state = self.service._load(self.ident)
+        backend = MemoryBackend(); self.service._backends[self.ident] = backend
         self.service._run('login', state, None)
         self.assertEqual(backend.calls, [(adapter.login_url, True)])
 
