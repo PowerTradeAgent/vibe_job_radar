@@ -20,13 +20,13 @@ from urllib.parse import urljoin, urlsplit
 
 from .browser import PlaywrightBackend
 from .contracts import CrawlError
-from .diagnostic_trace import notify, observe, traced
+from .diagnostic_trace import notify, observe, observe_robots, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
 from .native_errors import native_failure_code
 from .native_documents import continue_document_response
 from .rate import RateLimit
-from .transport import PinnedTransport
+from .transport import PinnedTransport, WireResponse
 from ..network import USER_AGENT
 
 
@@ -57,6 +57,8 @@ class NativeControl(PinnedTransport):
             raise CrawlError('robots_denied')
 
     def install_robots(self, origin, response, content_type, body):
+        observe_robots(getattr(self, '_diagnostics', None),
+                       WireResponse(response, {'content-type': content_type}, body))
         rules = NativeRobots(response, content_type, body)
         self.ledger.set_publisher(self.adapter.key, origin, delay=rules.delay)
         for count, seconds in rules.windows:
@@ -595,7 +597,9 @@ class NativeBackend(PlaywrightBackend):
         # CORS documents need a fully parsed policy before scripts execute.
         # No HTTP request is repeated; actual preflight/business replies remain
         # native. See native_documents for the bounded decoded-body delivery.
-        continue_document_response(self, session, event)
+        # Robots error pages are control data, never a login/content page. In
+        # particular an HTML 404 must not execute scripts while being inspected.
+        continue_document_response(self, session, event, robots=record['role'] == 'robots')
 
     def _finished(self, session, event):
         key=(session,event['requestId']); record=self._requests.pop(key,None)

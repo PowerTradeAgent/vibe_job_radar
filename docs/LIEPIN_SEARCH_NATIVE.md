@@ -6,7 +6,7 @@
 
 密码、短信码、二维码会话、Cookie、完整 HAR 和 `.radar-sessions` 不发送到聊天、Issue、模型或公共工件。用户只需在 Radar 自己打开的平台浏览器处理正常登录/必要验证，而不是复制日常浏览器的秘密。
 
-本版本**不实现自动填密或新的登录请求**。实际平台的跨域登录、SSO、iframe、服务端会话过期仍需逐站验证。获取账号信息不能弥补尚未适配的网络依赖。
+后续增量已实现本机单次授权的正常密码表单填写，见 [密码登录说明](LIEPIN_PASSWORD_LOGIN.md)。实际平台的完整登录、SSO、iframe、服务端会话过期仍需逐站验证。获取账号信息不能弥补尚未适配的网络依赖。
 
 ## 本次直接接通的代码路径
 
@@ -46,7 +46,7 @@ https://chromedevtools.github.io/devtools-protocol/tot/Fetch/
 
 `scripts/run_native_liepin_search.py --controlled` 使用三个自有人工HTTPS源，真正的Chromium/Edge原生后端、CORS、API-only无链接页面、实际LiepinAdapter及原报告；它不是实站采集。原四组原生反例/全套UI及单测保持；同一提交结果需单独核验。
 
-现有规则加载、TLS、公网目标检查、共享配额、停止控制保留。当前仍要求主站和业务源的robots可确认；实际资源/响应变化可能继续阻塞，不能标成live_verified。不修改其他两站、不增加后台调度。回滚本增量不删除任何岗位、报告或已保存会话；#49和#50真实目标保持开放。
+现有规则加载、TLS、公网目标检查、共享配额、停止控制保留。主站和业务源的 robots 按[状态和规则](ROBOTS_STATUS_HANDLING.md)分别处理；实际资源/响应变化可能继续阻塞，不能标成 live_verified。不增加后台调度。回滚本增量不删除任何岗位、报告或已保存会话；#49和#50真实目标保持开放。
 
 ## 跨域浏览器实现注意
 

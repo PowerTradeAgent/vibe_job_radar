@@ -68,7 +68,14 @@ class SearchFixture:
                     'identified': 'VibeJobRadar/0.1' in self.headers.get('User-Agent', '')})
             def do_GET(self):
                 self.record(); path = urlsplit(self.path).path
-                if path == '/robots.txt': self.send('User-agent: *\nAllow: /\n', 'text/plain')
+                if path == '/robots.txt':
+                    if self.headers.get('Host') in (API_HOST, LOGIN_HOST):
+                        # Match the observed missing API robots file. HTML error
+                        # content must remain inert while its status is read.
+                        self.send('<script>fetch("/robots-error-must-not-run")</script>'
+                                  '<img src="/robots-error-must-not-run">Not Found', status=404)
+                    else:
+                        self.send('User-agent: *\nAllow: /\n', 'text/plain')
                 elif path == '/zhaopin/':
                     # Intentionally no anchors: only the browser response can
                     # produce the candidate; a DOM-only implementation fails.
@@ -186,6 +193,8 @@ def main():
                     native = service._backends[task['id']]
                     assert native.native_counts['business']==2, 'POST and preflight must both be accounted'
                     result['checks'].append('native CDN script and cross-origin preflight/search POST supply a candidate without DOM links or login')
+                    assert not any(r['path']=='/robots-error-must-not-run' for r in server.requests)
+                    result['checks'].append('API robots 404 is distinguished from refusal; its HTML error body cannot execute scripts or fetch resources')
                     # With a two-page budget, the first gather has already
                     # looked for a next button. This source has none. A plain
                     # reread must still use the obtained API response, without

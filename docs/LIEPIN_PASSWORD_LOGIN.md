@@ -32,7 +32,7 @@
 ## 本次实站读取的结果
 
 - [www.liepin.com/robots.txt](https://www.liepin.com/robots.txt) 返回 200 text/plain，包含 `Disallow: /*?*`；本项目现有采集规则会阻止带关键词查询参数的搜索 URL。
-- `api-c.liepin.com/robots.txt` 与 `api-passport.liepin.com/robots.txt` 返回 404；本项目当前把此情况报告为 robots_unavailable。新增密码能力没有修改这个访问判断。
+- `api-c.liepin.com/robots.txt` 与 `api-passport.liepin.com/robots.txt` 返回 404。后续迭代已将此情况与访问拒绝区分，继续已有请求契约内的访问，见 [robots 状态处理](ROBOTS_STATUS_HANDLING.md)；不代表完整登录链路已实站通过。
 - 不带查询参数的 `/zhaopin/` 可读取，但本次 HTML 没有提供可确认的职位卡片，不计作搜索成功。
 - 首页实际给出的 `/job/1918256957.shtml` 返回“该职位已暂停招聘”，没有该岗位完整正文。新增 job_unavailable 结果，避免把过期职位误报为解析故障或登录失败；也不采用推荐岗位冒充。
 

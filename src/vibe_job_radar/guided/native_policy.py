@@ -186,10 +186,17 @@ def _glob_matches(pattern, target, anchored):
 class NativeRobots:
     """Bounded explicit rules, with conservative unavailable/invalid handling.
 
-    Non-200/HTML/invalid bodies are not converted to permission. Crawl-delay and
-    Request-rate are supported publisher extensions; never reduce ledger policy.
+    A 404/410 means no robots file (RFC 9309 section 2.3.1.3). Other errors,
+    including authentication/rate denials and invalid 200 bodies, still stop.
+    This does not grant an operation outside the site's request contract.
+    Crawl-delay and Request-rate never reduce the existing ledger policy.
     """
     def __init__(self, status, content_type, body):
+        self.rules, self.delay, self.windows = [], 0.0, []
+        if status in {404, 410}:
+            # Do not interpret an error document as publisher rules. In the
+            # native browser it is delivered with scripts/resources disabled.
+            return
         if (status != 200 or content_type.split(';')[0].strip().lower() != 'text/plain'
                 or len(body) > 512 * 1024):
             raise CrawlError('robots_unavailable')
@@ -221,7 +228,6 @@ class NativeRobots:
         selected = [v for a,v in groups if token in a]
         if not selected:
             selected = [v for a,v in groups if '*' in a]
-        self.rules, self.delay, self.windows = [], 0.0, []
         for group in selected:
             for key, value in group:
                 if key in {'allow','disallow'} and value:

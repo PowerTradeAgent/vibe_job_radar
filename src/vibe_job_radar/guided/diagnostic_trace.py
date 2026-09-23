@@ -48,7 +48,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     local_proxy_connection_failed local_socks_configuration_invalid
     local_socks_auth_unsupported local_socks_protocol_error local_socks_timeout
     local_socks_connection_failed local_socks_request_rejected local_socks_truncated_reply
-    robots_response_html robots_http_unavailable robots_encoding_invalid
+    robots_response_html robots_http_unavailable robots_encoding_invalid robots_file_absent
     robots_rules_observed robots_extensions_observed robots_no_rules_observed
     robots_inspection_truncated no_cards no_records native_administrator_blocked native_contract_unavailable
     native_contract_invalid native_operation_unreviewed native_surface_unsupported
@@ -296,7 +296,9 @@ def observe_robots(trace, result):
     if type(trace) is not DiagnosticTrace:
         return
     try:
-        if result.status != 200:
+        if result.status in {404, 410}:
+            code = 'robots_file_absent'
+        elif result.status != 200:
             code = 'robots_http_unavailable'
         elif 'html' in result.headers.get('content-type', '').lower():
             code = 'robots_response_html'

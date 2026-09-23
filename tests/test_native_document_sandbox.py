@@ -3,7 +3,8 @@ import copy
 import base64
 import unittest
 
-from vibe_job_radar.guided.native_documents import document_response_params, continue_document_response, DOCUMENT_SANDBOX
+from vibe_job_radar.guided.native_documents import (document_response_params,
+    continue_document_response, DOCUMENT_SANDBOX, ROBOTS_SANDBOX)
 import test_native_acquisition as fixtures
 
 
@@ -81,6 +82,25 @@ class ControllerDocumentPolicyTests(unittest.TestCase):
     setUp = fixtures.NativeControllerTests.setUp
     req = fixtures.NativeControllerTests.req
     response = fixtures.NativeControllerTests.response
+
+    def test_robots_error_document_is_inert_even_without_a_cors_contract(self):
+        self.b._native_cors = False
+        self.b._loading_robots = True
+        self.b._robots_url = fixtures.URL + '/robots.txt'
+        self.b._paused('session', self.req('/robots.txt', 'GET', 'Document'))
+        self.b._paused('session', self.response(404, {'content-type': 'text/html'},
+            path='/robots.txt', method='GET', kind='Document'))
+        args = self.b._send.call_args.args
+        self.assertEqual(args[1], 'Fetch.getResponseBody')
+        raw = '<html><script>fetch("/apply")</script>Not Found</html>'
+        args[3]({'body': raw})
+        delivery = self.b._send.call_args.args
+        self.assertEqual(delivery[1], 'Fetch.fulfillRequest')
+        self.assertEqual(delivery[2]['responseCode'], 404)
+        self.assertEqual(base64.b64decode(delivery[2]['body']), raw.encode())
+        self.assertIn({'name': 'Content-Security-Policy', 'value': ROBOTS_SANDBOX},
+                      delivery[2]['responseHeaders'])
+        self.assertIsNone(self.b.error)
 
     def test_cors_document_runs_through_existing_response_validation(self):
         self.b._native_cors = True
