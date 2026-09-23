@@ -67,7 +67,8 @@ function render(){
  if(current.outcome){
    const o=current.outcome,summary=document.createElement('p'),counts=document.createElement('p');
    summary.id='acquisition-outcome';summary.className='warning';summary.textContent=o.message;
-   counts.id='acquisition-counts';counts.textContent=`所选 ${o.selected} · 正文保存 ${o.saved} · 失败 ${o.failed} · 待处理 ${o.pending} · 纳入目标岗位 ${o.target_jobs} · 有AI编程证据 ${o.ai_jobs}`;
+   counts.id='acquisition-counts';counts.textContent=`发现 ${o.discovered??current.cards.length} · 所选 ${o.selected} · 完整正文 ${o.full_jd??o.saved} · 目标岗位 ${o.target_relevant??o.target_jobs} · 有明确AI要求的岗位 ${o.jobs_with_explicit_ai_requirements??o.ai_jobs} · 失败 ${o.failed} · 待处理 ${o.pending}`;
+   if(o.requirement_rows!==undefined){const rows=document.createElement('p');rows.textContent=`提取要求 ${o.requirement_rows} 条 · 已接收正向要求 ${o.accepted_positive_requirement_rows} 条 · 待复核 ${o.review_pending_rows} 条。要求条数与岗位数分别计算。`;$('result').append(rows);}
    $('result').append(summary,counts);
  }
  if(current.report_id){for(const [file,label] of [['requirements_zh.csv','下载岗位要求 CSV'],['descriptions.md','下载描述模板'],...(current.outcome ? [['guided_acquisition.json','下载本批采集结果']] : [])]){const b=document.createElement('button');b.className='secondary';b.textContent=label;const id=current.report_id;b.onclick=()=>act(()=>downloadReport(id,file));$('result').append(b);}const view=document.createElement('a');view.href='/#report='+current.report_id;view.textContent=' 查看本批研究结论';const a=document.createElement('a');a.href='/advanced#report='+current.report_id;a.textContent=' 用本批要求进入个人证据中心';$('result').append(view);if(!current.outcome||current.outcome.target_jobs>0)$('result').append(a);}

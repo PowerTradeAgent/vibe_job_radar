@@ -37,6 +37,7 @@ from ..network_policy import current_policy
 from .contracts import CrawlError
 from .batch_identity import batch_cards, page_signature, strategy as identity_strategy
 from .checkpoint import decode as decode_checkpoint, binding as checkpoint_binding, ensure_compatible
+from .acquisition_results import analysis_by_record, audit_items
 from .login_return import (LoginReturnManager, ReturnedDetail,
                            matching_detail_signature, pending_detail_target)
 from .session_reuse import reuse_current_session
@@ -379,6 +380,7 @@ class GuidedService:
             state['selection_source'] = 'manual'
             state['report_id'] = ''
             state.pop('outcome', None)
+            state.pop('acquisition_items', None)
             state['phase'] = 'collect'
         with self._lock:
             if self._busy:
@@ -821,6 +823,7 @@ class GuidedService:
                             store.add(record)
                     row.update(status='ok', record_id=record.record_id, resolved_url=final_url, title=record.title,
                                parser=record.parser, body_sha256=hashlib.sha256(record.text.encode('utf-8')).hexdigest(),
+                               raw_sha256=record.raw_sha256, collected_at=record.collected_at,
                                adapter_version=getattr(adapter, 'version', 'custom'),
                                acquisition_path='login_returned_detail' if from_current else 'navigation')
                     identity = getattr(adapter, 'job_identity', None)
@@ -863,6 +866,13 @@ class GuidedService:
         return {'schema_version': 1, 'status': status, 'message': message,
                 'selected': len(rows), 'saved': saved, 'failed': failed, 'pending': pending,
                 'target_jobs': target_jobs, 'ai_jobs': ai_jobs,
+                'discovered': len(state['cards']), 'full_jd': saved,
+                'target_relevant': stats.get('selected_source_records', target_jobs),
+                'jobs_with_explicit_ai_requirements': stats.get('vibe_evidence_source_records', ai_jobs),
+                'requirement_rows': stats.get('requirement_rows', 0),
+                'accepted_positive_requirement_rows': stats.get('accepted_positive_requirement_rows', 0),
+                'review_pending_rows': stats.get('review_queue_rows', 0),
+                'counting': 'funnel counts source jobs; target_jobs/ai_jobs count report deduplicated groups; requirements count rows',
                 'scope': 'selected batch only; saved is not target match or live-site certification'}
 
     def _selected_records(self, state):
@@ -898,7 +908,7 @@ class GuidedService:
         selected = set(state['selection'])
         if not any(c['status']=='ok' and c['id'] in selected for c in state['cards']):
             notify(self._trace_for(state), 'note', code='no_records')
-            self._save(state, outcome=self._outcome(state), report_id='')
+            self._save(state, outcome=self._outcome(state), acquisition_items=audit_items(state, {}), report_id='')
             return
         from ..pipeline import analyze
         with writer_lock(self.workspace.root):
@@ -916,17 +926,19 @@ class GuidedService:
                 manifest = analyze(batch_db, report_root, config=config,
                     role_filter=state['roles'], platform_filter=[adapter.key])
             outcome = self._outcome(state, manifest)
+            analysis = analysis_by_record(report_root)
             audit = {'schema_version': 1, 'task_id': state['id'],
                      'adapter': {'key': adapter.key, 'version': getattr(adapter, 'version', 'custom')},
-                     'outcome': outcome, 'items': [
-                         {k: c.get(k, '') for k in ('id', 'url', 'resolved_url', 'status', 'record_id', 'platform_job_id', 'parser', 'body_sha256', 'adapter_version', 'acquisition_path')}
-                         for c in state['cards'] if c['id'] in selected]}
+                     'backend': state.get('backend', 'bridge'),
+                     'identity_strategy': state.get('identity_strategy', 'observed_url_v1'),
+                     'outcome': outcome, 'items': audit_items(state, analysis)}
             audit_path = report_root/'guided_acquisition.json'
             atomic_json(audit_path, audit)
             manifest['acquisition_outcome'] = outcome
             manifest['output_files_sha256'][audit_path.name] = hashlib.sha256(audit_path.read_bytes()).hexdigest()
             atomic_json(report_root/'run_manifest.json', manifest)
         self._save(state, report_id=report_id, outcome=outcome,
+                   acquisition_items=audit['items'],
                    report_scope='exact successful selected records in this batch')
 
     @traced('task', 'service', state_index=1)
