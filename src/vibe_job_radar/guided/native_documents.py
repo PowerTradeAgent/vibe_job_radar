@@ -15,7 +15,7 @@ from .contracts import CrawlError
 
 # Preserve scripts, the original origin and same-tab normal forms. Do not grant
 # popups, popup escape, downloads, top navigation or other unsupported surfaces.
-DOCUMENT_SANDBOX = 'sandbox allow-scripts allow-same-origin allow-forms'
+DOCUMENT_SANDBOX = "sandbox allow-scripts allow-same-origin allow-forms; frame-src 'none'"
 ROBOTS_SANDBOX = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'"
 
 

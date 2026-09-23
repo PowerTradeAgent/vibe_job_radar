@@ -702,7 +702,14 @@ class NativeBackend(PlaywrightBackend):
             self._check_error()
             # Readiness is site content/response/challenge, not network-idle or a
             # fixed sleep. The existing parser still determines usable job data.
-            text=self.page.locator('body').inner_text(timeout=1000)
+            body = self.page.locator('body')
+            if not body.count():
+                # A navigation can replace the document after DOMContentLoaded.
+                # Stay within the existing overall deadline instead of failing
+                # the entire login after a one-second locator timeout.
+                self.page.wait_for_timeout(100)
+                continue
+            text=body.inner_text(timeout=1000)
             if self.adapter.challenged(text,self.page.url):
                 raise CrawlError('manual_required')
             if self.auth_mode and text.strip():

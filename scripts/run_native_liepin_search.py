@@ -83,6 +83,7 @@ class SearchFixture:
                              '(window.open("/apply") === null);</script>'
                              if parse_qs(urlsplit(self.path).query).get('key') == ['窗口隔离'] else '')
                     self.send('<!doctype html><meta charset="utf-8">' + early + '<h1>合成搜索页</h1>'
+                              '<iframe id="common-footer" src="https://' + CDN_HOST + '/footer"></iframe>'
                               '<div id="loaded"></div><script src="https://' + CDN_HOST + ASSET + '"></script>')
                 elif path == ASSET:
                     self.send("""const key = new URL(location.href).searchParams.get('key');
@@ -195,6 +196,8 @@ def main():
                     result['checks'].append('native CDN script and cross-origin preflight/search POST supply a candidate without DOM links or login')
                     assert not any(r['path']=='/robots-error-must-not-run' for r in server.requests)
                     result['checks'].append('API robots 404 is distinguished from refusal; its HTML error body cannot execute scripts or fetch resources')
+                    assert not any(r['path']=='/footer' for r in server.requests)
+                    result['checks'].append('unsupported embedded footer is blocked before loading without aborting the main search document')
                     # With a two-page budget, the first gather has already
                     # looked for a next button. This source has none. A plain
                     # reread must still use the obtained API response, without

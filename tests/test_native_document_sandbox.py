@@ -67,8 +67,9 @@ class DocumentPolicyTests(unittest.TestCase):
         self.assertIn('responseHeaders', document_response_params(event(responseHeaders=[]), enabled=True))
 
     def test_origin_and_forms_preserved_but_new_windows_not_enabled(self):
-        self.assertEqual(DOCUMENT_SANDBOX.split(),
+        self.assertEqual(DOCUMENT_SANDBOX.split(';')[0].split(),
                          ['sandbox', 'allow-scripts', 'allow-same-origin', 'allow-forms'])
+        self.assertIn("frame-src 'none'", DOCUMENT_SANDBOX)
         self.assertNotIn('allow-popups', DOCUMENT_SANDBOX)
         self.assertNotIn('allow-top-navigation', DOCUMENT_SANDBOX)
 
