@@ -31,6 +31,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     robots_denied robots_unavailable resource_domain_blocked write_not_allowed
     method_blocked redirect_requires_attention login_origin_changed invalid_url
     wrong_platform credential_url not_job_url not_job_list manual_required
+    login_form_changed login_credentials_rejected login_password_submitted job_unavailable invalid_page_observation
     structure_changed invalid_job_data response_too_large request_too_large
     unexpected_compression request_headers_invalid request_headers_conflict remote_server_error site_stopped
     page_not_ready browser_closed browser_missing playwright_missing
@@ -158,7 +159,7 @@ class DiagnosticTrace:
 
     def begin(self, stage, actor, *, url='', resource='unknown', method='', impact='unknown', operation='', entity=''):
         with self._lock:
-            operation = operation if operation in {'search', 'login', 'capture', 'more', 'collect', 'pause_idle', 'close', 'resume'} else ''
+            operation = operation if operation in {'search', 'login', 'login_password', 'capture', 'more', 'collect', 'pause_idle', 'close', 'resume'} else ''
             entity = entity if isinstance(entity, str) and re.fullmatch(r'[a-f0-9]{24}', entity) else ''
             parent = self._frames[-1] if self._frames else {}
             frame = {'operation': operation or parent.get('operation', ''), 'entity': entity or parent.get('entity', ''), 'stage': stage if stage in STAGES else 'unknown',

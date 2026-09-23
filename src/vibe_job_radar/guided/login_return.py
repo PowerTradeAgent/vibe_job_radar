@@ -129,7 +129,7 @@ class LoginReturnManager:
     def disarm(self, ident):
         return self._watches.pop(ident, None) is not None
 
-    def _attention(self, service, ident, watch):
+    def _attention(self, service, ident, watch, code=None):
         # DOM access can yield to pause or a new action; never overwrite its
         # newer state when reporting an observation error.
         with service._lock:
@@ -140,7 +140,7 @@ class LoginReturnManager:
                 return
             state = service._load(ident)
             if state.get('status') == 'waiting_manual':
-                service._save(state, login_continuation='needs_attention')
+                service._save(state, login_continuation='needs_attention', **({'code': code} if code else {}))
 
     def tick(self, service):
         """Called on the same worker as Playwright, after pumping page events."""
@@ -195,7 +195,7 @@ class LoginReturnManager:
                                 'jd_incomplete', 'invalid_job_data', 'credential_url'}:
                     watch.signature = watch.surface = None
                     continue
-                self._attention(service, ident, watch)
+                self._attention(service, ident, watch, exc.code)
                 continue
             except Exception:
                 self._attention(service, ident, watch)

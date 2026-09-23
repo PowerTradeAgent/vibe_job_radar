@@ -16,6 +16,7 @@ from ..html_parser import (Document, Node, ParseError, jobpostings, plain_text,
                            _posting_identity, _unique_object)
 from .adapters import DOMAdapter
 from .contracts import Card, CrawlError, PageSnapshot
+from .page_surface import surface_text
 
 _OMIT = {'script', 'style', 'nav', 'footer', 'aside', 'noscript', 'template', 'iframe', 'svg'}
 _HEADINGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'dt'}
@@ -275,7 +276,7 @@ class LiepinAdapter(DOMAdapter):
         # variants: persisted page signatures and selections depend on them.
         # Entity-level cross-page/task deduplication belongs to D05, not a silent
         # migration during detail-parser rollout.
-        if self.challenged(plain_text(page.html), page.url):
+        if self.challenged(surface_text(page), page.url):
             raise CrawlError('manual_required')
         from .liepin_search import observed_cards
         observed = observed_cards(self, page)
@@ -313,7 +314,10 @@ class LiepinAdapter(DOMAdapter):
     def detail(self, page: PageSnapshot) -> dict:
         self.job_identity(page.url)
         self.validate_detail_identity(page.url, page)
-        if self.challenged(plain_text(page.html), page.url):
+        visible = surface_text(page)
+        if re.search(r'该职位已(?:暂停|停止|结束)招聘|职位已下线|职位已关闭', visible):
+            raise CrawlError('job_unavailable')
+        if self.challenged(visible, page.url):
             raise CrawlError('manual_required')
         intro = structured_intro_detail(page.html, page.url, self.job_identity)
         if intro is not None:

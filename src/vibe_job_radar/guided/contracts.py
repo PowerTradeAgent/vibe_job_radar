@@ -18,6 +18,7 @@ class PageSnapshot:
     url: str
     html: str = field(repr=False)
     business: tuple = field(default=(), repr=False)  # Private observations, never task/diagnostic output.
+    visible_text: str | None = field(default=None, repr=False)
 
 
 class CrawlError(RuntimeError):

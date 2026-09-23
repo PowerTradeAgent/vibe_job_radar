@@ -1,7 +1,7 @@
 """Trusted-code native access contracts. Web forms cannot add hosts or operations.
 
-Liepin has one recorded read-only search operation and static asset hosts.
-No login POST is enabled. Unreviewed operations remain explicit failures.
+Liepin has a recorded read-only search operation and explicit normal password
+login operations, available only during a user-requested login action.
 """
 from __future__ import annotations
 
@@ -106,13 +106,16 @@ class NativeContract:
 def liepin_bootstrap():
     # Historical request/markup evidence is recorded in LIEPIN_SEARCH_NATIVE.md.
     # The code contract supports one read-only search operation; it does NOT
-    # certify current platform access or enable login/application/message APIs.
+    # certify current platform access. Login paths were checked against the
+    # publisher's public frontend on 2026-09-23 (LIEPIN_PASSWORD_LOGIN.md).
     host, api, cdn, image = 'www.liepin.com', 'api-c.liepin.com', 'concat.lietou-static.com', 'image0.lietou-static.com'
     search = r'/api/com\.liepin\.searchfront4c\.pc-search-job'
     cors = dict(cors_origin='https://' + host, cors_headers=(
         'content-type', 'x-client-type', 'x-fscp-version', 'x-requested-with',
         'x-fscp-std-info', 'x-fscp-trace-id'))
-    return NativeContract('liepin_search_read_v1', (host, api, cdn, image), (
+    passport = 'api-passport.liepin.com'
+    login = r'/api/com\.liepin\.passport\.account\.(?:account-pwd-login|check-login|v2\.check-login|get-category)'
+    return NativeContract('liepin_search_login_v2', (host, api, cdn, image, passport), (
         NativeRule('liepin_navigation', host, r'(?:/|/zhaopin/|/job/[^/]+\.(?:shtml|html)|/a/[0-9]+\.shtml|/lptjob/[0-9]+)',
                    resources=('Document',), role='document'),
         NativeRule('liepin_same_host_assets', host, r'.+\.(?:js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf)',
@@ -125,6 +128,11 @@ def liepin_bootstrap():
         NativeRule('liepin_search', api, search, methods=('POST',), **cors),
         NativeRule('liepin_search_preflight', api, search, methods=('OPTIONS',),
                    resources=('Preflight', 'Other', 'Fetch', 'XHR'), role='business', **cors),
+        NativeRule('liepin_password_login', passport, login, methods=('POST',),
+                   role='login', authentication=True, **cors),
+        NativeRule('liepin_login_preflight', passport, login, methods=('OPTIONS',),
+                   resources=('Preflight', 'Other', 'Fetch', 'XHR'), role='login',
+                   authentication=True, **cors),
     ), bootstrap_only=False)
 
 

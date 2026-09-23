@@ -8,7 +8,7 @@ if (location.hash) history.replaceState(null,'',location.pathname+location.searc
 let requestedTask=new URLSearchParams(location.search).get('task')||'';
 let state=null, current=null, selecting=new Set(), loadedId='', requesting=false, sticky='';
 const installationNames={restart_required:'组件更新后需重启工作台再检查',not_started:'本次会话未执行安装（不表示缺少组件）',installing:'正在安装',installed:'安装并启动验证成功',installed_not_ready:'安装命令成功，但启动检查失败',dependency_install_failed:'安装失败',dependency_install_timeout:'安装超时'};
-const cardStatus={job_identity_mismatch:'详情身份不一致，未保存',jd_incomplete:'正文尚未完整展开，未保存',discovered:'待选择',opening:'读取中',ok:'正文已保存',structure_changed:'无法确认独立完整正文',invalid_job_data:'岗位字段无效或正文超出限制',not_job_url:'不是已识别的详情地址',manual_required:'需要正常登录或验证',http_401:'需要核对登录或权限',http_403:'站点拒绝访问',http_429:'来源要求等待',paused:'已暂停',network_error:'网络未完成'};
+const cardStatus={job_unavailable:'岗位已暂停招聘或下线',job_identity_mismatch:'详情身份不一致，未保存',jd_incomplete:'正文尚未完整展开，未保存',discovered:'待选择',opening:'读取中',ok:'正文已保存',structure_changed:'无法确认独立完整正文',invalid_job_data:'岗位字段无效或正文超出限制',not_job_url:'不是已识别的详情地址',manual_required:'需要正常登录或验证',http_401:'需要核对登录或权限',http_403:'站点拒绝访问',http_429:'来源要求等待',paused:'已暂停',network_error:'网络未完成'};
 const statusNames={queued:'准备中',running:'执行中',ready:'可以选择岗位',waiting_rate:'按来源要求等待',waiting_manual:'需要你处理',paused:'已暂停',completed:'批次结束',stopped:'已停止',interrupted:'上次服务已退出'};
 async function api(path,data){const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:{'X-Radar-Token':token,...(data===undefined?{}:{'Content-Type':'application/json'})},body:data===undefined?undefined:JSON.stringify(data),cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'操作失败');return result;}
 function note(text){$('busy').textContent=text;}
@@ -52,8 +52,9 @@ function render(){
  options($('task'),state.jobs.map(j=>[j.id,`${j.platform} · ${j.keyword} · ${statusNames[j.status]||j.status}`]));
  if(requestedTask&&state.jobs.some(j=>j.id===requestedTask)){$('task').value=requestedTask;requestedTask='';}
  current=state.jobs.find(j=>j.id===$('task').value)||null;
+ $('password-login').hidden=!current || current.platform!=='liepin';
  if(current&&loadedId!==current.id){selecting=new Set(current.selection||[]);loadedId=current.id;}
- $('login-return-status').textContent=current?({watching:'等待平台返回本任务原检索页或所选完整岗位详情；连续可读后自动继续，最长10分钟。不自动填密或绕过验证。',checking_detail:'已观察到所选完整详情，正在重新核对身份和正文；不重复请求该岗位。',resumed_detail:'已从登录返回的所选详情接回原采集和报告；不等于账号认证证明。',resumed:'已识别本任务可读列表，已自动接回任务；不等于账号认证证明。',timed_out:'自动接续等待已结束；会话未删除，可按原按钮继续。',needs_attention:'当前页面或网络需要处理，自动接续已停止。',cancelled:'自动接续已取消。'}[current.login_continuation]||''):'';
+ $('login-return-status').textContent=current?({watching:'等待平台返回本任务原检索页或所选完整岗位详情；连续可读后自动继续，最长10分钟。不重复提交登录或绕过验证。',checking_detail:'已观察到所选完整详情，正在重新核对身份和正文；不重复请求该岗位。',resumed_detail:'已从登录返回的所选详情接回原采集和报告；不等于账号认证证明。',resumed:'已识别本任务可读列表，已自动接回任务；不等于账号认证证明。',timed_out:'自动接续等待已结束；会话未删除，可按原按钮继续。',needs_attention:'当前页面或网络需要处理，自动接续已停止。',cancelled:'自动接续已取消。'}[current.login_continuation]||''):'';
  $('saved-session-status').textContent=current?({empty:'本机尚无可用的保存会话；公开可读页面可直接采集，平台要求时再正常登录。',restored_unverified:'已恢复本站 Cookie；仍须由正常页面确认是否有效，未自动填写密码。',saved_unverified:'本站 Cookie 已保存到本机，供下次启动尝试恢复；不等于登录已认证。',expired:'本机快照已过 7 天，未恢复；请按平台正常流程重新登录。',cleared:'此平台保存会话已清除，旧任务不会自动重新启用保存。',save_failed:'本批结果已保留，但会话保存失败：'+(current.saved_session_error||'未知错误')}[current.saved_session_status]||''):'';
  $('session-reuse-status').textContent=current?.session_reused?'已复用当前采集浏览器会话；是否仍然登录以平台正常响应为准。停止或退出会关闭浏览器；仅明确启用的本站 Cookie 快照可供下次恢复。':'';
  if(current){$('resume').textContent=current.authentication==='manual_pending'?'登录完成，继续原任务':'继续原任务';$('task-status').textContent=`${current.backend==='native'?'原生网络实验':'原有HTTP桥'} · ${statusNames[current.status]||current.status}：${current.message}`;
@@ -80,6 +81,17 @@ function renderCards(){const root=$('cards');root.replaceChildren();if(!current.
 async function refresh(){state=await api('/api/guided/state');render();}
 $('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(async()=>{const data=Object.fromEntries(new FormData(f));data.roles=[data.role];delete data.role;data.max_pages=Number(data.max_pages);data.max_jobs=Number(data.max_jobs);data.consent=f.elements.consent.checked;data.diagnostics=f.elements.diagnostics.checked;data.reuse_current_session=f.elements.reuse_current_session.checked;data.persist_session=f.elements.persist_session.checked;data.auto_collect=f.elements.auto_collect.checked;data.native_consent=f.elements.native_consent.checked;const r=await api('/api/guided/create',data);loadedId='';await refresh();$('task').value=r.id;render();});});
 $('task').addEventListener('change',()=>{loadedId='';render();});
+$('password-login-form').addEventListener('submit', e=>{
+ e.preventDefault();
+ if(requesting || state?.busy)return;
+ const form=e.currentTarget;
+ const data={id:active(),action:'login_password',username:form.elements.username.value,
+  password:form.elements.password.value,credential_consent:form.elements.credential_consent.checked};
+ // Clear the local controls immediately, including on a failed request. Never
+ // put these values in state, storage, URLs, notes, console output or downloads.
+ form.reset();
+ act(async()=>{try{await api('/api/guided/action',data);}finally{data.username='';data.password='';}});
+});
 for(const [button,action] of Object.entries({'login':'login','capture':'capture','search-again':'search','pause':'pause','resume':'resume','stop':'stop'}))$(button).addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action,...(action==='login'?{auto_continue:$('auto-login-return').checked}:{})})));
 $('collect').addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action:'collect',selected:[...selecting]})));
 $('select-all').addEventListener('click',()=>{if(!current)return;selecting=new Set(current.cards.slice(0,current.max_jobs).map(c=>c.id));renderCards();});

@@ -647,6 +647,9 @@ class NativeBackend(PlaywrightBackend):
     def _load_robots(self):
         main=self.page
         for origin in self.contract.rule_origins:
+            if not any('https://' + rule.host == origin and
+                       (not rule.authentication or self.auth_mode) for rule in self.contract.rules):
+                continue
             if origin in self.wire.rules:
                 continue
             self._loading_robots=True; self._robots_url=origin+'/robots.txt'

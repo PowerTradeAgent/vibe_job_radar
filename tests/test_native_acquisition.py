@@ -51,7 +51,9 @@ class NativePolicyTests(unittest.TestCase):
         self.assertFalse(c.bootstrap_only)
         self.assertEqual({r.key for r in c.rules if r.role=='business'},
                          {'liepin_search', 'liepin_search_preflight'})
-        self.assertFalse(any(r.role == 'login' for r in c.rules))
+        self.assertEqual({r.key for r in c.rules if r.role == 'login'},
+                         {'liepin_password_login', 'liepin_login_preflight'})
+        self.assertTrue(all(r.authentication for r in c.rules if r.role == 'login'))
         for site in ('boss','51job'):
             with self.assertRaises(CrawlError):contract_for(builtins().get(site))
     def test_reviewed_read_post_is_allowed(self):

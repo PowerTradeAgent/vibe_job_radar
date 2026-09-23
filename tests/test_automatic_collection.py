@@ -189,14 +189,26 @@ class AutomaticCollectionTests(unittest.TestCase):
         self.assertEqual(sum(url == SEARCH for url, _ in calls), 1)
         self.assertEqual(sum('/job/1.shtml' in url for url, _ in calls), 1)
 
-    def test_visible_and_hidden_challenge_checks_unchanged(self):
+    def test_visible_challenge_stops_collection(self):
         state = self.create()
         backend = MemoryBackend(); backend.page = PageSnapshot(SEARCH,
-            '<h1>合成页面</h1><div hidden>登录后查看</div><a href="/job/1.shtml">岗位</a>')
+            '<h1>合成页面</h1><div>登录后查看</div><a href="/job/1.shtml">岗位</a>')
         self.service._backends[state['id']] = backend
         with self.assertRaises(CrawlError) as error: self.service._run('capture', state, None)
         self.assertEqual(error.exception.code, 'manual_required')
         self.assertEqual(state['selection'], []); self.assertFalse(backend.calls)
+
+    def test_hidden_login_template_does_not_block_real_collection(self):
+        state = self.create()
+        backend = MemoryBackend(); backend.page = PageSnapshot(SEARCH,
+            '<h1>合成页面</h1><div hidden>登录后查看</div><a href="/job/1.shtml">岗位</a>')
+        self.service._backends[state['id']] = backend
+        self.service._run('capture', state, None)
+        self.assertEqual(state['status'], 'completed')
+        self.assertEqual(state['outcome']['saved'], 1)
+        self.assertTrue(state['report_id'])
+        with Store(self.workspace.db) as store:
+            self.assertEqual([r.text for r in store.records()], [BODY])
 
     def test_original_query_after_manual_login_can_auto_collect(self):
         state = self.create()

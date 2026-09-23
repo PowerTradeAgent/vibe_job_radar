@@ -1,7 +1,8 @@
 """Local guided task service. All browser calls stay on one owning thread.
 
 UI requests enqueue actions and return immediately. Jobs and quotas survive process
-restarts; cookie sessions are opt-in and local; passwords are never accepted. Dependency injection enables offline tests.
+restarts; cookie sessions are opt-in and local. An explicit password login uses
+one in-memory form submission, never persisted credentials.
 """
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ from .login_return import (LoginReturnManager, ReturnedDetail,
                            matching_detail_signature, pending_detail_target)
 from .session_reuse import reuse_current_session
 from .saved_session import SavedSession
+from .password_login import LoginCredentials
 from .rate import RateLedger, RateLimit
 from .transport import diagnose_host
 from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
@@ -46,6 +48,11 @@ from .browser_choice import BrowserChoice, CHOICES, validate_choice
 from .. import tls_context
 
 MESSAGES = {
+    'login_form_changed': '未找到可确认的猎聘密码登录表单，已停止自动填写。请在采集浏览器检查页面并正常登录。',
+    'login_password_submitted': '已在猎聘正常表单提交一次。请查看平台反馈；协议、验证码或短信验证需在该页面完成。原搜索或所选完整岗位可读后自动继续，不会重复提交密码。',
+    'invalid_page_observation': '页面观察无效，已保留任务并停止读取。',
+    'job_unavailable': '平台已标明该职位暂停招聘或已下线，未把推荐职位保存为该岗位正文。',
+    'login_credentials_rejected': '平台提示账号或密码错误。自动接续已停止，不会重试密码；请在平台正常页面核对。',
     'saved_session_invalid': '保存的会话格式无效。未启动新的采集；请清除该平台保存的会话后正常登录。',
     'saved_session_incompatible': '保存会话的工作区、平台版本、后端、浏览器或网络设置不匹配。未自动换身份重试；请明确清除该平台保存的会话。',
     'saved_session_unreadable': '保存的会话无法读取或解密。请使用原 Windows 用户，或清除后重新正常登录。',
@@ -316,11 +323,11 @@ class GuidedService:
     def action(self, data):
         ident, action = data.get('id'), data.get('action')
         state = self._load(ident)
-        if any(k in data for k in ('username','password','cookie','credential_consent')):
+        if 'cookie' in data or (action != 'login_password' and any(k in data for k in ('username','password','credential_consent'))):
             raise InputError('本向导不接收账号密码；请在平台原生浏览器页面登录。')
         if any(k in data for k in ('backend', 'native_consent', 'native_contract', 'persist_session', 'storage_state', 'auto_collect')):
             raise InputError('任务后端不可中途更换；新任务仍共享原配额。')
-        permitted = {'search', 'login', 'capture', 'more', 'collect', 'pause', 'stop', 'resume', 'forget_session'}
+        permitted = {'search', 'login', 'login_password', 'capture', 'more', 'collect', 'pause', 'stop', 'resume', 'forget_session'}
         if action not in permitted:
             raise InputError('未知操作。')
         if action == 'forget_session' and data.get('confirm') is not True:
@@ -345,6 +352,12 @@ class GuidedService:
         if action == 'resume' and state['status'] in {'completed', 'stopped'}:
             return {'id': ident, 'message': '该任务已结束；已有报告保留。重新打开搜索请使用搜索按钮。'}
         secret = None
+        if action == 'login_password':
+            if state['platform'] != 'liepin':
+                raise InputError('本次密码表单适配仅支持猎聘；其他平台请在采集浏览器正常登录。')
+            if set(data) - {'id', 'action', 'username', 'password', 'credential_consent'}:
+                raise InputError('密码登录只接受本次账号、密码和明确授权。')
+            secret = LoginCredentials.from_input(data)
         if action == 'collect':
             ids = data.get('selected')
             known = {r['id'] for r in state['cards']}
@@ -358,12 +371,16 @@ class GuidedService:
             state['phase'] = 'collect'
         with self._lock:
             if self._busy:
+                if isinstance(secret, LoginCredentials):
+                    secret.clear()
                 raise InputError('当前动作尚未结束，请先暂停或等待。')
             self._login_return.disarm(ident)
             if action == 'login':
                 state['auto_continue_after_login'] = data.get('auto_continue', False)
+            elif action == 'login_password':
+                state['auto_continue_after_login'] = True
             state['login_continuation'] = 'off'
-            self._save(state, 'opening' if action in {'search','login'} else state['code'],
+            self._save(state, 'opening' if action in {'search','login','login_password'} else state['code'],
                        status='queued', auto_resume=False, next_allowed_at=None)
             self._submit(action, ident, secret)
         return {'id': ident, 'queued': True}
@@ -875,7 +892,7 @@ class GuidedService:
             self._cancel.set()
             self._save(state,'paused',status='paused'); return
         adapter = self.registry.get(state['platform'])
-        if action == 'login':
+        if action in {'login', 'login_password'}:
             try:
                 self.ledger.reserve(adapter.key, 'login')
             except RateLimit as exc:
@@ -899,7 +916,7 @@ class GuidedService:
             backend = self._backend(state)
         self._save(state, 'opening', status='running')
         pending_login = state.get('authentication') == 'manual_pending'
-        if action == 'login':
+        if action in {'login', 'login_password'}:
             # Save intent before open(): the native page itself can ask for
             # manual assistance and raise, but the original task must survive.
             watching = self._login_return.arm(state, backend)
@@ -908,8 +925,17 @@ class GuidedService:
             target = pending_detail_target(state) if watching else None
             # An explicit opt-in login for an interrupted selection stays on
             # that job's native login gate, rather than discarding it for a homepage.
-            backend.open(target.expected_url if target else adapter.login_url, authentication=True)
-            self._save(state, 'manual_detail_open' if target else 'manual_browser_open',
+            url = target.expected_url if target else (state['search_url'] if watching else adapter.login_url)
+            try:
+                backend.open(url, authentication=True)
+            except CrawlError as exc:
+                if action != 'login_password' or exc.code != 'manual_required':
+                    raise
+            if action == 'login_password':
+                if not isinstance(secret, LoginCredentials):
+                    raise CrawlError('login_form_changed')
+                backend.password_login(secret)
+            self._save(state, 'login_password_submitted' if action == 'login_password' else 'manual_detail_open' if target else 'manual_browser_open',
                        status='waiting_manual', authentication='manual_pending')
         elif action == 'resume_returned_detail':
             if self._cancel.is_set():
@@ -1058,6 +1084,8 @@ class GuidedService:
                     except Exception:
                         pass
             finally:
+                if isinstance(secret, LoginCredentials):
+                    secret.clear()
                 secret = None
                 if ident and self._stop_ident == ident:
                     self._stop_ident = None

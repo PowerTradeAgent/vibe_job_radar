@@ -143,6 +143,14 @@ class ReturnWatcherTests(unittest.TestCase):
         self.backend.snapshot.assert_called_once()
         self.service._submit.assert_not_called()
 
+    def test_rejected_password_is_reported_and_never_retried(self):
+        self.backend.snapshot.side_effect=CrawlError('login_credentials_rejected')
+        self.tick();self.tick()
+        self.assertEqual(self.state['code'],'login_credentials_rejected')
+        self.assertEqual(self.state['login_continuation'],'needs_attention')
+        self.backend.snapshot.assert_called_once()
+        self.service._submit.assert_not_called()
+
     def test_pause_disarm_cancels_a_stable_candidate(self):
         self.tick();self.manager.disarm('task');self.tick()
         self.service._submit.assert_not_called()
