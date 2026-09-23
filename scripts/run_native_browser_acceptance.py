@@ -337,8 +337,12 @@ def main():
                     result['checks'].append('reviewed native login POST executes only in explicit authentication mode')
                     checkpoint('negative-popup')
                     b.page.evaluate("() => {window.open('/apply'); window.open('/apply', '_blank', 'noopener');}")
-                    b.pump()  # Production owner loop drains rejected paused targets.
+                    try:
+                        b.pump()  # Drain owned targets and surface the refusal to the worker.
+                    except CrawlError as exc:
+                        assert exc.code == 'native_surface_unsupported', exc.code
                     b.page.wait_for_timeout(150)
+                    assert b.error == 'native_surface_unsupported', b.error
                     assert len(b.context.pages)==1, 'uncontrolled popup escaped the owned-page boundary'
                     assert not any(r['path']=='/apply' for r in good.requests)
                     result['checks'].append('script popups, including noopener, do not create uncontrolled requests')
